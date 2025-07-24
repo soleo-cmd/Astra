@@ -16,7 +16,7 @@ A modern Entity Component System reimagined for contemporary CPU architectures a
 - [Benchmarks](#-benchmarks)
 - [Building](#-building)
 - [Examples](#-examples)
-- [Roadmap](#-roadmap)\
+- [Roadmap](#-roadmap)
 - [License](#-license)
 
 ## 🌟 Overview
