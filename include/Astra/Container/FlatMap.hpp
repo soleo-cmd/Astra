@@ -1,0 +1,1260 @@
+#pragma once
+
+#include <algorithm>
+#include <bit>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <utility>
+#include <vector>
+
+#include "../Core/Config.hpp"
+#include "../Core/Error.hpp"
+#include "../Core/Result.hpp"
+#include "../Core/Simd.hpp"
+#include "../Entity/Entity.hpp"
+
+namespace Astra
+{    
+    // Helper to select the best hash for a given key type
+    template<typename Key>
+    struct SelectHash
+    {
+        using type = std::hash<Key>;
+    };
+    
+    struct EntityHash
+    {
+        std::size_t operator()(const Entity& entity) const noexcept
+        {
+            uint64_t hash = entity.Value();
+            hash = Simd::Ops::HashCombine(hash, 0x9E3779B97F4A7C15ULL);
+            if ((hash & 0x7F) == 0)
+            {
+                // Ensure valid H2
+                hash |= 1;
+            }
+            return hash;
+        }
+    };
+    
+    // Specialize for Entity to use our optimized hash
+    template<>
+    struct SelectHash<Entity>
+    {
+        using type = EntityHash;
+    };
+    
+    // FlatMap: A high-performance hash map with SwissTable-inspired design
+    // - SIMD-accelerated metadata scanning
+    // - Cache-friendly memory layout with prefetching
+    // - Tombstone collapsing for better performance after deletions
+    //
+    // Thread Safety: This container is NOT thread-safe. Concurrent access
+    // to non-const methods requires external synchronization.
+    template<typename Key,
+             typename Value,
+             typename Hash = typename SelectHash<Key>::type,
+             typename KeyEqual = std::equal_to<Key>,
+             typename Allocator = std::allocator<std::pair<const Key, Value>>>
+    class FlatMap
+    {
+    public:
+        using KeyType = Key;
+        using MappedType = Value;
+        using ValueType = std::pair<const Key, Value>;
+        using SizeType = std::size_t;
+        using DifferenceType = std::ptrdiff_t;
+        using Hasher = Hash;
+        using KeyEqualType = KeyEqual;
+        using AllocatorType = Allocator;
+        using Reference = ValueType&;
+        using ConstReference = const ValueType&;
+        using Pointer = ValueType*;
+        using ConstPointer = const ValueType*;
+
+    private:
+        static constexpr std::uint8_t EMPTY = 0b10000000;       // 0x80
+        static constexpr std::uint8_t TOMBSTONE = 0b11111110;   // 0xFE
+
+        static constexpr std::uint8_t H2_MASK = 0b01111111;     // 0x7F
+        
+        static constexpr SizeType GROUP_SIZE = 16;              // Group size for metadata
+        static constexpr SizeType MIN_CAPACITY = 16;
+        static constexpr float MAX_LOAD_FACTOR = 0.875f;
+        
+        // Helper to find first set bit (trailing zeros count)
+        static inline int FindFirstSet(std::uint16_t mask) noexcept
+        {
+            if (mask == 0) return 16;
+            return std::countr_zero(mask);  // C++20
+        }
+        
+        // Extract H1 (57-bit position) and H2 (7-bit metadata) from hash
+        static std::pair<std::size_t, std::uint8_t> SplitHash(std::size_t hash) noexcept
+        {
+            // H1: Use upper 57 bits for position
+            std::size_t h1 = hash >> 7;
+            // H2: Use lower 7 bits for metadata (ensuring it's never a control byte)
+            std::uint8_t h2 = hash & H2_MASK;
+            if (h2 == 0)
+            {
+                h2 = 1;  // Ensure valid H2
+            }
+            return {h1, h2};
+        }
+        
+        struct Group
+        {
+            alignas(16) std::uint8_t metadata[GROUP_SIZE];
+            
+            Group() noexcept
+            {
+                std::memset(metadata, EMPTY, GROUP_SIZE);
+            }
+            
+            std::uint16_t Match(std::uint8_t h2) const noexcept
+            {
+                ASTRA_ASSUME(h2 > 0 && h2 < 128);
+                return Simd::Ops::MatchByteMask(metadata, h2);
+            }
+            
+            std::uint16_t MatchEmpty() const noexcept
+            {
+                return Simd::Ops::MatchByteMask(metadata, EMPTY);
+            }
+            
+            std::uint16_t MatchEmptyOrDeleted() const noexcept
+            {
+                return Simd::Ops::MatchEitherByteMask(metadata, EMPTY, TOMBSTONE);
+            }
+            
+            std::uint16_t MatchOccupied() const noexcept
+            {
+                return ~Simd::Ops::MatchEitherByteMask(metadata, EMPTY, TOMBSTONE);
+            }
+            
+            void Set(SizeType index, std::uint8_t value) noexcept
+            {
+                metadata[index] = value;
+            }
+            
+            std::uint8_t Get(SizeType index) const noexcept
+            {
+                return metadata[index];
+            }
+            
+            // Direct access to metadata for advanced SIMD operations
+            [[nodiscard]] const std::uint8_t* Data() const noexcept
+            {
+                return metadata;
+            }
+            
+            // Count occupied slots
+            [[nodiscard]] int CountOccupied() const noexcept
+            {
+                return std::popcount(MatchOccupied());
+            }
+        };
+        
+        // Storage for key-value pairs
+        struct Slot
+        {
+            alignas(ValueType) std::uint8_t storage[sizeof(ValueType)];
+            
+            ValueType* GetValue() noexcept
+            {
+                return std::launder(reinterpret_cast<ValueType*>(storage));
+            }
+            
+            const ValueType* GetValue() const noexcept
+            {
+                return std::launder(reinterpret_cast<const ValueType*>(storage));
+            }
+        };
+        
+        using SlotAllocator = typename std::allocator_traits<Allocator>::template rebind_alloc<Slot>;
+        using GroupAllocator = typename std::allocator_traits<Allocator>::template rebind_alloc<Group>;
+        
+        Group* m_groups = nullptr;
+        Slot* m_slots = nullptr;
+        SizeType m_capacity = 0;
+        SizeType m_size = 0;
+        SizeType m_num_groups = 0;
+        SizeType m_tombstone_count = 0;
+        Hasher m_hasher;
+        KeyEqualType m_equal;
+        AllocatorType m_alloc;  // Keep the original allocator for ValueType
+        SlotAllocator m_slot_alloc;
+        GroupAllocator m_group_alloc;
+        
+    public:
+        class iterator
+        {
+            friend class FlatMap;
+            friend class const_iterator;
+            
+        private:
+            FlatMap* m_map = nullptr;
+            SizeType m_index = 0;
+            
+            void SkipEmpty() noexcept
+            {
+                if (!m_map) return;
+
+                while (m_index < m_map->m_capacity)  // Just check capacity
+                {
+                    SizeType group_idx = m_index / GROUP_SIZE;
+                    SizeType slot_idx = m_index % GROUP_SIZE;
+
+                    // Only check groups that exist
+                    if (group_idx < m_map->m_num_groups)
+                    {
+                        std::uint8_t meta = m_map->m_groups[group_idx].Get(slot_idx);
+                        // Only skip EMPTY and TOMBSTONE - no SENTINEL check needed
+                        if (meta != EMPTY && meta != TOMBSTONE)
+                        {
+                            return;
+                        }
+                    }
+                    ++m_index;
+                }
+            }
+            
+        public:
+            using iterator_category = std::forward_iterator_tag;
+            using value_type = ValueType;
+            using difference_type = DifferenceType;
+            using pointer = Pointer;
+            using reference = Reference;
+            
+            iterator() = default;
+            
+            iterator(FlatMap* map, SizeType index) noexcept
+                : m_map(map), m_index(index)
+            {
+                SkipEmpty();
+            }
+            
+            reference operator*() const noexcept
+            {
+                ASTRA_ASSERT(m_index < m_map->m_capacity, "Iterator out of bounds");
+                ASTRA_ASSERT(m_map->m_slots != nullptr, "Dereferencing invalid iterator");
+
+#ifdef ASTRA_BUILD_DEBUG
+                SizeType group_idx = m_index / GROUP_SIZE;
+                SizeType slot_idx = m_index % GROUP_SIZE;
+                std::uint8_t meta = m_map->m_groups[group_idx].Get(slot_idx);
+                ASTRA_ASSERT(meta != EMPTY && meta != TOMBSTONE, "Iterator points to invalid slot");
+#endif
+
+                return *m_map->m_slots[m_index].GetValue();
+            }
+            
+            pointer operator->() const noexcept
+            {
+                ASTRA_ASSERT(m_index < m_map->m_capacity, "Iterator out of bounds");
+                ASTRA_ASSERT(m_map->m_slots != nullptr, "Dereferencing invalid iterator");
+                return m_map->m_slots[m_index].GetValue();
+            }
+            
+            iterator& operator++() noexcept
+            {
+                ++m_index;
+                SkipEmpty();
+                return *this;
+            }
+            
+            iterator operator++(int) noexcept
+            {
+                iterator tmp = *this;
+                ++(*this);
+                return tmp;
+            }
+            
+            [[nodiscard]] bool operator==(const iterator& other) const noexcept = default;
+        };
+        
+        // const_iterator implementation similar to iterator...
+        class const_iterator
+        {
+            friend class FlatMap;
+            
+        private:
+            const FlatMap* m_map = nullptr;
+            SizeType m_index = 0;
+            
+            void SkipEmpty() noexcept
+            {
+                if (!m_map) return;
+                
+                while (m_index < m_map->m_capacity)
+                {
+                    SizeType group_idx = m_index / GROUP_SIZE;
+                    SizeType slot_idx = m_index % GROUP_SIZE;
+                    
+                    // Prefetch next group during iteration
+                    if (slot_idx == 0 && group_idx + 1 < m_map->m_num_groups)
+                    {
+                        Simd::Ops::PrefetchT0(&m_map->m_groups[group_idx + 1]);
+                    }
+                    
+                    if (group_idx < m_map->m_num_groups)
+                    {
+                        std::uint8_t meta = m_map->m_groups[group_idx].Get(slot_idx);
+                        if (meta != EMPTY && meta != TOMBSTONE)
+                        {
+                            return;
+                        }
+                    }
+                    ++m_index;
+                }
+            }
+            
+        public:
+            using iterator_category = std::forward_iterator_tag;
+            using value_type = ValueType;
+            using difference_type = DifferenceType;
+            using pointer = ConstPointer;
+            using reference = ConstReference;
+            
+            const_iterator() = default;
+            
+            const_iterator(const FlatMap* map, SizeType index) noexcept
+                : m_map(map), m_index(index)
+            {
+                SkipEmpty();
+            }
+            
+            // Conversion from iterator to const_iterator
+            const_iterator(const iterator& it) noexcept
+                : m_map(it.m_map), m_index(it.m_index)
+            {
+            }
+            
+            reference operator*() const noexcept
+            {
+                ASTRA_ASSERT(m_index < m_map->m_capacity, "Iterator out of bounds");
+                ASTRA_ASSERT(m_map->m_slots != nullptr, "Dereferencing invalid iterator");
+
+#ifdef ASTRA_BUILD_DEBUG
+                SizeType group_idx = m_index / GROUP_SIZE;
+                SizeType slot_idx = m_index % GROUP_SIZE;
+                std::uint8_t meta = m_map->m_groups[group_idx].Get(slot_idx);
+                ASTRA_ASSERT(meta != EMPTY && meta != TOMBSTONE, "Iterator points to invalid slot");
+#endif
+
+                return *m_map->m_slots[m_index].GetValue();
+            }
+            
+            pointer operator->() const noexcept
+            {
+                ASTRA_ASSERT(m_index < m_map->m_capacity, "Iterator out of bounds");
+                ASTRA_ASSERT(m_map->m_slots != nullptr, "Dereferencing invalid iterator");
+                return m_map->m_slots[m_index].GetValue();
+            }
+            
+            const_iterator& operator++() noexcept
+            {
+                ++m_index;
+                SkipEmpty();
+                return *this;
+            }
+            
+            const_iterator operator++(int) noexcept
+            {
+                const_iterator tmp = *this;
+                ++(*this);
+                return tmp;
+            }
+            
+            [[nodiscard]] bool operator==(const const_iterator& other) const noexcept = default;
+        };
+        
+        FlatMap() = default;
+        
+        explicit FlatMap(SizeType capacity,
+                        const Hasher& hash = Hasher(),
+                        const KeyEqualType& equal = KeyEqualType(),
+                        const AllocatorType& alloc = AllocatorType())
+            : m_hasher(hash)
+            , m_equal(equal)
+            , m_alloc(alloc)
+            , m_slot_alloc(alloc)
+            , m_group_alloc(alloc)
+        {
+            if (capacity > 0)
+            {
+                Reserve(capacity);
+            }
+        }
+        
+        ~FlatMap() noexcept
+        {
+            Clear();
+            DeallocateStorage();
+        }
+        
+        FlatMap(const FlatMap& other) noexcept(std::is_nothrow_copy_constructible_v<Hasher> && std::is_nothrow_copy_constructible_v<KeyEqualType> && std::is_nothrow_copy_constructible_v<AllocatorType>)
+            : m_hasher(other.m_hasher)
+            , m_equal(other.m_equal)
+            , m_alloc(other.m_alloc)
+            , m_slot_alloc(other.m_slot_alloc)
+            , m_group_alloc(other.m_group_alloc)
+        {
+            if (other.m_size == 0) return;
+
+            const SizeType needed_capacity = [&]()
+            {
+                const SizeType min_size = static_cast<SizeType>(other.m_size / MAX_LOAD_FACTOR);
+                if (min_size > std::numeric_limits<SizeType>::max() - GROUP_SIZE)
+                {
+                    return std::numeric_limits<SizeType>::max();
+                }
+                return min_size + GROUP_SIZE;
+            }();
+            Reserve(needed_capacity);
+
+            // Copy elements group by group for cache efficiency
+            for (SizeType group_idx = 0; group_idx < other.m_num_groups; ++group_idx)
+            {
+                // Prefetch next group for better performance
+                if (group_idx + 1 < other.m_num_groups)
+                {
+                    Simd::Ops::PrefetchT0(&other.m_groups[group_idx + 1]);
+                    Simd::Ops::PrefetchT0(&other.m_slots[(group_idx + 1) * GROUP_SIZE]);
+                }
+
+                // Process all occupied slots in this group at once
+                std::uint16_t occupied = other.m_groups[group_idx].MatchOccupied();
+
+                while (occupied)
+                {
+                    SizeType slot_idx = FindFirstSet(occupied);
+                    SizeType src_idx = group_idx * GROUP_SIZE + slot_idx;
+
+                    std::uint8_t h2 = other.m_groups[group_idx].Get(slot_idx);
+
+                    if (src_idx >= other.m_capacity)
+                    {
+                        occupied &= occupied - 1;
+                        continue;
+                    }
+
+                    const auto& kv = *other.m_slots[src_idx].GetValue();
+
+                    // Use proper SwissTable group-based probing
+                    auto [h1, _] = SplitHash(m_hasher(kv.first));
+                    SizeType index = h1 & (m_capacity - 1);
+
+                    // Find insertion position using group-based probing
+                    while (true)
+                    {
+                        SizeType target_group = index / GROUP_SIZE;
+                        SizeType start_slot = index % GROUP_SIZE;
+
+                        // Get empty slots in this group
+                        std::uint16_t empty_slots = m_groups[target_group].MatchEmpty();
+
+                        // Phase 1: Check from start_slot to end
+                        std::uint16_t phase1_empty = empty_slots >> start_slot;
+                        if (phase1_empty)
+                        {
+                            SizeType offset = FindFirstSet(phase1_empty);
+                            SizeType target_idx = (target_group * GROUP_SIZE) + start_slot + offset;
+
+                            std::allocator_traits<AllocatorType>::construct(
+                                m_alloc,
+                                m_slots[target_idx].GetValue(),
+                                kv
+                            );
+                            m_groups[target_group].Set(start_slot + offset, h2);
+                            ++m_size;
+                            break;
+                        }
+
+                        // Phase 2: Check from beginning to start_slot
+                        if (start_slot > 0)
+                        {
+                            std::uint16_t phase2_mask = (1u << start_slot) - 1;
+                            std::uint16_t phase2_empty = empty_slots & phase2_mask;
+
+                            if (phase2_empty)
+                            {
+                                SizeType target_slot = FindFirstSet(phase2_empty);
+                                SizeType target_idx = (target_group * GROUP_SIZE) + target_slot;
+
+                                std::allocator_traits<AllocatorType>::construct(
+                                m_alloc,
+                                m_slots[target_idx].GetValue(),
+                                kv
+                            );
+                                m_groups[target_group].Set(target_slot, h2);
+                                ++m_size;
+                                break;
+                            }
+                        }
+
+                        // Move to next group
+                        target_group = (target_group + 1) % m_num_groups;
+                        index = target_group * GROUP_SIZE;
+                    }
+
+                    // Clear this bit and continue
+                    occupied &= occupied - 1;
+                }
+            }
+
+            ASTRA_ASSERT(m_size == other.m_size, "Copy size mismatch");
+        }
+        
+        FlatMap(FlatMap&& other) noexcept
+            : m_groups(other.m_groups)
+            , m_slots(other.m_slots)
+            , m_capacity(other.m_capacity)
+            , m_size(other.m_size)
+            , m_tombstone_count(other.m_tombstone_count)
+            , m_num_groups(other.m_num_groups)
+            , m_hasher(std::move(other.m_hasher))
+            , m_equal(std::move(other.m_equal))
+            , m_alloc(std::move(other.m_alloc))
+            , m_slot_alloc(std::move(other.m_slot_alloc))
+            , m_group_alloc(std::move(other.m_group_alloc))
+        {
+            other.m_groups = nullptr;
+            other.m_slots = nullptr;
+            other.m_capacity = 0;
+            other.m_size = 0;
+            other.m_tombstone_count = 0;
+            other.m_num_groups = 0;
+        }
+        
+        FlatMap& operator=(const FlatMap& other)
+        {
+            if (this != &other)
+            {
+                FlatMap tmp(other);
+                Swap(tmp);
+            }
+            return *this;
+        }
+        
+        FlatMap& operator=(FlatMap&& other) noexcept
+        {
+            if (this != &other)
+            {
+                Clear();
+                DeallocateStorage();
+                
+                m_groups = other.m_groups;
+                m_slots = other.m_slots;
+                m_capacity = other.m_capacity;
+                m_size = other.m_size;
+                m_tombstone_count = other.m_tombstone_count;
+                m_num_groups = other.m_num_groups;
+                m_hasher = std::move(other.m_hasher);
+                m_equal = std::move(other.m_equal);
+                m_alloc = std::move(other.m_alloc);
+                m_slot_alloc = std::move(other.m_slot_alloc);
+                m_group_alloc = std::move(other.m_group_alloc);
+                
+                other.m_groups = nullptr;
+                other.m_slots = nullptr;
+                other.m_capacity = 0;
+                other.m_size = 0;
+                other.m_tombstone_count = 0;
+                other.m_num_groups = 0;
+            }
+            return *this;
+        }
+        
+        [[nodiscard]] iterator begin() noexcept { return iterator(this, 0); }
+        [[nodiscard]] const_iterator begin() const noexcept { return const_iterator(this, 0); }
+        [[nodiscard]] iterator end() noexcept { return iterator(this, m_capacity); }
+        [[nodiscard]] const_iterator end() const noexcept { return const_iterator(this, m_capacity); }
+        
+        [[nodiscard]] bool Empty() const noexcept { return m_size == 0; }
+        [[nodiscard]] SizeType Size() const noexcept { return m_size; }
+        [[nodiscard]] SizeType Capacity() const noexcept { return m_capacity; }
+        
+        void Clear() noexcept
+        {
+            if (!m_slots) return;
+            
+            for (SizeType i = 0; i < m_capacity; ++i)
+            {
+                SizeType group_idx = i / GROUP_SIZE;
+                SizeType slot_idx = i % GROUP_SIZE;
+                
+                std::uint8_t meta = m_groups[group_idx].Get(slot_idx);
+                if (meta != EMPTY && meta != TOMBSTONE)
+                {
+                    std::allocator_traits<AllocatorType>::destroy(m_alloc, m_slots[i].GetValue());
+                    m_groups[group_idx].Set(slot_idx, EMPTY);
+                }
+            }
+            m_size = 0;
+            m_tombstone_count = 0;
+        }
+        
+    private:
+        template<typename K>
+        SizeType FindImpl(const K& key, std::uint8_t& h2_out) const noexcept
+        {
+            if (Empty() || !m_groups) return m_capacity;
+
+            auto [h1, h2] = SplitHash(m_hasher(key));
+            h2_out = h2;
+            SizeType index = h1 & (m_capacity - 1);
+            SizeType probes = 0;
+
+            while (probes++ < m_capacity)
+            {
+                SizeType group_idx = index / GROUP_SIZE;
+                SizeType start_slot = index % GROUP_SIZE;
+
+                // IMPROVEMENT 1: Prefetch NEXT group's metadata early
+                SizeType next_group_idx = (group_idx + 1) % m_num_groups;
+                Simd::Ops::PrefetchT1(&m_groups[next_group_idx]);
+
+                // Get all matches in this group
+                std::uint16_t matches = m_groups[group_idx].Match(h2);
+
+                // IMPROVEMENT 2: Prefetch slots if we have matches
+                if (matches)
+                {
+                    // Prefetch the first potential match slot
+                    SizeType first_match_idx = FindFirstSet(matches);
+                    SizeType prefetch_idx = group_idx * GROUP_SIZE + first_match_idx;
+                    Simd::Ops::PrefetchT0(&m_slots[prefetch_idx]);
+
+                    // IMPROVEMENT 3: If multiple matches, prefetch up to 2 more slots
+                    std::uint16_t remaining_matches = matches & (matches - 1); // Clear first bit
+                    if (remaining_matches)
+                    {
+                        SizeType second_match_idx = FindFirstSet(remaining_matches);
+                        prefetch_idx = group_idx * GROUP_SIZE + second_match_idx;
+                        Simd::Ops::PrefetchT1(&m_slots[prefetch_idx]);
+                    }
+                }
+
+                // Phase 1: Check from start_slot to end of group
+                std::uint16_t phase1_matches = matches >> start_slot;
+
+                while (phase1_matches)
+                {
+                    SizeType offset = FindFirstSet(phase1_matches);
+                    SizeType slot_idx = start_slot + offset;
+                    SizeType global_idx = group_idx * GROUP_SIZE + slot_idx;
+
+                    // IMPROVEMENT 4: Prefetch next match while processing current
+                    std::uint16_t next_matches = phase1_matches & (phase1_matches - 1);
+                    if (next_matches)
+                    {
+                        SizeType next_offset = FindFirstSet(next_matches);
+                        SizeType next_idx = group_idx * GROUP_SIZE + start_slot + next_offset;
+                        Simd::Ops::PrefetchT0(&m_slots[next_idx]);
+                    }
+
+                    if (m_equal(m_slots[global_idx].GetValue()->first, key))
+                    {
+                        return global_idx;
+                    }
+
+                    phase1_matches = next_matches; // Use already computed value
+                }
+
+                // Phase 2: Check from beginning of group to start_slot
+                if (start_slot > 0)
+                {
+                    std::uint16_t phase2_mask = (1u << start_slot) - 1;
+                    std::uint16_t phase2_matches = matches & phase2_mask;
+
+                    while (phase2_matches)
+                    {
+                        SizeType slot_idx = FindFirstSet(phase2_matches);
+                        SizeType global_idx = group_idx * GROUP_SIZE + slot_idx;
+
+                        // Similar prefetch for phase 2
+                        std::uint16_t next_matches = phase2_matches & (phase2_matches - 1);
+                        if (next_matches)
+                        {
+                            SizeType next_idx = group_idx * GROUP_SIZE + FindFirstSet(next_matches);
+                            Simd::Ops::PrefetchT0(&m_slots[next_idx]);
+                        }
+
+                        if (m_equal(m_slots[global_idx].GetValue()->first, key))
+                        {
+                            return global_idx;
+                        }
+
+                        phase2_matches = next_matches;
+                    }
+                }
+
+                // IMPROVEMENT 5: Combine empty checks to reduce SIMD operations
+                std::uint16_t empty_matches = m_groups[group_idx].MatchEmpty();
+
+                // Check both phases at once
+                std::uint16_t relevant_empty = (start_slot > 0) 
+                    ? empty_matches  // Need to check all slots
+                    : (empty_matches >> start_slot);  // Only check from start_slot
+
+                if (relevant_empty != 0)
+                {
+                    return m_capacity; // Empty slot found, key doesn't exist
+                }
+
+                // Move to the next group
+                group_idx = next_group_idx; // Reuse computed value
+                index = group_idx * GROUP_SIZE;
+
+                // Prefetch already done at start of loop - removed duplicate
+            }
+
+            return m_capacity;
+        }
+        
+    public:
+        template<typename K>
+        iterator Find(const K& key) noexcept
+        {
+            std::uint8_t h2;
+            SizeType idx = FindImpl(key, h2);
+            return idx < m_capacity ? iterator(this, idx) : end();
+        }
+        
+        template<typename K>
+        const_iterator Find(const K& key) const noexcept
+        {
+            std::uint8_t h2;
+            SizeType idx = FindImpl(key, h2);
+            return idx < m_capacity ? const_iterator(this, idx) : end();
+        }
+        
+        template<typename K>
+        [[nodiscard]] bool Contains(const K& key) const noexcept
+        {
+            return Find(key) != end();
+        }
+        
+        template<typename K, typename... Args>
+        std::pair<iterator, bool> Emplace(K&& key, Args&&... args)
+        {
+            ReserveForInsert();
+            ASTRA_ASSERT(m_size + m_tombstone_count < m_capacity, "Table should have space after reserve");
+
+            auto [h1, h2] = SplitHash(m_hasher(key));
+            SizeType index = h1 & (m_capacity - 1);
+            SizeType probes = 0;
+
+            while (probes++ < m_capacity)
+            {
+                SizeType group_idx = index / GROUP_SIZE;
+                SizeType start_slot = index % GROUP_SIZE;
+
+                // First, check if key already exists
+                std::uint16_t matches = m_groups[group_idx].Match(h2);
+
+                // Phase 1: Check existing keys from start_slot to end of group
+                std::uint16_t phase1_matches = matches >> start_slot;
+
+                while (phase1_matches)
+                {
+                    SizeType offset = FindFirstSet(phase1_matches);
+                    SizeType slot_idx = start_slot + offset;
+                    SizeType global_idx = group_idx * GROUP_SIZE + slot_idx;
+
+                    if (m_equal(m_slots[global_idx].GetValue()->first, key))
+                    {
+                        return {iterator(this, global_idx), false}; // Key already exists
+                    }
+
+                    phase1_matches &= phase1_matches - 1;
+                }
+
+                // Phase 2: Check existing keys from beginning to start_slot
+                if (start_slot > 0)
+                {
+                    std::uint16_t phase2_mask = (1u << start_slot) - 1;
+                    std::uint16_t phase2_matches = matches & phase2_mask;
+
+                    while (phase2_matches)
+                    {
+                        SizeType slot_idx = FindFirstSet(phase2_matches);
+                        SizeType global_idx = group_idx * GROUP_SIZE + slot_idx;
+
+                        if (m_equal(m_slots[global_idx].GetValue()->first, key))
+                        {
+                            return {iterator(this, global_idx), false}; // Key already exists
+                        }
+
+                        phase2_matches &= phase2_matches - 1;
+                    }
+                }
+
+                // Now look for empty or deleted slots to insert
+                std::uint16_t empty_or_deleted = m_groups[group_idx].MatchEmptyOrDeleted();
+
+                // Phase 1: Check for empty/deleted slots from start_slot to end
+                std::uint16_t phase1_empty = empty_or_deleted >> start_slot;
+
+                if (phase1_empty)
+                {
+                    SizeType offset = FindFirstSet(phase1_empty);
+                    SizeType slot_idx = start_slot + offset;
+                    SizeType global_idx = group_idx * GROUP_SIZE + slot_idx;
+
+                    // Construct the key-value pair in place
+                    std::allocator_traits<AllocatorType>::construct(
+                        m_alloc,
+                        m_slots[global_idx].GetValue(),
+                        std::piecewise_construct,
+                        std::forward_as_tuple(std::forward<K>(key)),
+                        std::forward_as_tuple(std::forward<Args>(args)...)
+                    );
+
+                    m_groups[group_idx].Set(slot_idx, h2);
+                    ++m_size;
+
+                    return {iterator(this, global_idx), true};
+                }
+
+                // Phase 2: Check for empty/deleted slots from beginning to start_slot
+                if (start_slot > 0)
+                {
+                    std::uint16_t phase2_mask = (1u << start_slot) - 1;
+                    std::uint16_t phase2_empty = empty_or_deleted & phase2_mask;
+
+                    if (phase2_empty)
+                    {
+                        SizeType slot_idx = FindFirstSet(phase2_empty);
+                        SizeType global_idx = group_idx * GROUP_SIZE + slot_idx;
+
+                        // Construct the key-value pair in place
+                        std::allocator_traits<AllocatorType>::construct(
+                            m_alloc,
+                            m_slots[global_idx].GetValue(),
+                            std::piecewise_construct,
+                            std::forward_as_tuple(std::forward<K>(key)),
+                            std::forward_as_tuple(std::forward<Args>(args)...)
+                        );
+
+                        m_groups[group_idx].Set(slot_idx, h2);
+                        ++m_size;
+
+                        return {iterator(this, global_idx), true};
+                    }
+                }
+
+                // No space in this group, move to next
+                group_idx = (group_idx + 1) % m_num_groups;
+                index = group_idx * GROUP_SIZE;
+
+                // Prefetch next group
+                if (group_idx < m_num_groups)
+                {
+                    Simd::Ops::PrefetchT0(&m_groups[group_idx]);
+                }
+            }
+
+            // Should never reach here if ReserveForInsert() works correctly
+            ASTRA_ASSERT(false, "FlatMap::Emplace failed to find insertion slot");
+            return {end(), false};
+        }
+        
+        std::pair<iterator, bool> Insert(const ValueType& value)
+        {
+            return Emplace(value.first, value.second);
+        }
+        
+        std::pair<iterator, bool> Insert(ValueType&& value)
+        {
+            return Emplace(std::move(value.first), std::move(value.second));
+        }
+        
+        template<typename K>
+        MappedType& operator[](K&& key)
+        {
+            return Emplace(std::forward<K>(key)).first->second;
+        }
+        
+        template<typename K>
+        SizeType Erase(const K& key)
+        {
+            auto it = Find(key);
+            if (it == end()) return 0;
+            
+            Erase(it);
+            return 1;
+        }
+        
+        iterator Erase(iterator pos)
+        {
+            SizeType idx = pos.m_index;
+            SizeType group_idx = idx / GROUP_SIZE;
+            SizeType slot_idx = idx % GROUP_SIZE;
+            
+            std::allocator_traits<AllocatorType>::destroy(m_alloc, m_slots[idx].GetValue());
+            m_groups[group_idx].Set(slot_idx, TOMBSTONE);
+            --m_size;
+            ++m_tombstone_count;  // Track tombstones
+
+            // CollapseTombstones(group_idx, slot_idx);
+            
+            return ++pos;
+        }
+        
+        void Reserve(SizeType count)
+        {
+            if (count > m_capacity)
+            {
+                SizeType new_capacity = NextPowerOfTwo(std::max(count, MIN_CAPACITY));
+                Rehash(new_capacity);
+            }
+        }
+        
+        void Swap(FlatMap& other) noexcept
+        {
+            std::swap(m_groups, other.m_groups);
+            std::swap(m_slots, other.m_slots);
+            std::swap(m_capacity, other.m_capacity);
+            std::swap(m_size, other.m_size);
+            std::swap(m_tombstone_count, other.m_tombstone_count);
+            std::swap(m_num_groups, other.m_num_groups);
+            std::swap(m_hasher, other.m_hasher);
+            std::swap(m_equal, other.m_equal);
+            std::swap(m_alloc, other.m_alloc);
+            std::swap(m_slot_alloc, other.m_slot_alloc);
+            std::swap(m_group_alloc, other.m_group_alloc);
+        }
+        
+        // TryGet methods for consistency with other containers
+        template<typename K>
+        [[nodiscard]] MappedType* TryGet(const K& key) noexcept
+        {
+            auto it = Find(key);
+            return it != end() ? &it->second : nullptr;
+        }
+        
+        template<typename K>
+        [[nodiscard]] const MappedType* TryGet(const K& key) const noexcept
+        {
+            auto it = Find(key);
+            return it != end() ? &it->second : nullptr;
+        }
+        
+        // Batch operations for ECS workloads
+        template<typename K, size_t N>
+        void FindBatch(const K (&keys)[N], iterator (&results)[N]) noexcept
+        {
+            // Prefetch all hash computations
+            std::uint8_t h2_values[N];
+            SizeType indices[N];
+            
+            for (size_t i = 0; i < N; ++i)
+            {
+                auto [h1, h2] = SplitHash(m_hasher(keys[i]));
+                h2_values[i] = h2;
+                indices[i] = h1 & (m_capacity - 1);
+                
+                // Prefetch the group we'll need
+                SizeType group_idx = indices[i] / GROUP_SIZE;
+                if (group_idx < m_num_groups)
+                {
+                    Simd::Ops::PrefetchT0(&m_groups[group_idx]);
+                }
+            }
+            
+            // Now perform lookups with data in cache
+            for (size_t i = 0; i < N; ++i)
+            {
+                SizeType idx = FindImpl(keys[i], h2_values[i]);
+                results[i] = idx < m_capacity ? iterator(this, idx) : end();
+            }
+        }
+        
+        // Group-based iteration for SIMD processing
+        template<bool IsConst>
+        struct GroupViewBase
+        {
+            using SlotPtr = std::conditional_t<IsConst, const Slot*, Slot*>;
+            using ValueRef = std::conditional_t<IsConst, const ValueType&, ValueType&>;
+            using ValuePtr = std::conditional_t<IsConst, const ValueType*, ValueType*>;
+            
+            const Group* group;
+            SlotPtr slots;
+            SizeType group_index;
+            std::uint16_t occupied_mask;
+            
+            [[nodiscard]] bool HasNext() const noexcept
+            {
+                return occupied_mask != 0;
+            }
+            
+            [[nodiscard]] SizeType NextIndex() noexcept
+            {
+                ASTRA_ASSERT(HasNext(), "No more elements in group");
+                int slot_idx = Simd::Ops::CountTrailingZeros(occupied_mask);
+                occupied_mask &= (occupied_mask - 1); // Clear lowest bit
+                return group_index * GROUP_SIZE + slot_idx;
+            }
+            
+            [[nodiscard]] ValueRef NextValue() noexcept
+            {
+                SizeType idx = NextIndex();
+                return *slots[idx % GROUP_SIZE].GetValue();
+            }
+            
+            // Process all occupied slots with a function
+            template<typename Func>
+            void ForEach(Func&& func)
+            {
+                while (HasNext())
+                {
+                    func(NextValue());
+                }
+            }
+            
+            // Get pointers to all occupied values for vectorized processing
+            SizeType GetValuePointers(ValuePtr* ptrs, SizeType max_count) const noexcept
+            {
+                SizeType count = 0;
+                std::uint16_t mask = occupied_mask;
+                while (mask != 0 && count < max_count)
+                {
+                    int slot_idx = Simd::Ops::CountTrailingZeros(mask);
+                    ptrs[count++] = slots[slot_idx].GetValue();
+                    mask &= (mask - 1);
+                }
+                return count;
+            }
+        };
+        
+        using GroupView = GroupViewBase<false>;
+        using ConstGroupView = GroupViewBase<true>;
+        
+        // Iterator over groups for SIMD-friendly processing
+        class GroupIterator
+        {
+        private:
+            FlatMap* m_map;
+            SizeType m_group_idx;
+            
+        public:
+            GroupIterator(FlatMap* map, SizeType group_idx) noexcept
+                : m_map(map), m_group_idx(group_idx) {}
+            
+            [[nodiscard]] GroupView operator*() const noexcept
+            {
+                ASTRA_ASSERT(m_group_idx < m_map->m_num_groups, "Group index out of bounds");
+                return GroupView{
+                    &m_map->m_groups[m_group_idx],
+                    &m_map->m_slots[m_group_idx * GROUP_SIZE],
+                    m_group_idx,
+                    m_map->m_groups[m_group_idx].MatchOccupied()
+                };
+            }
+            
+            GroupIterator& operator++() noexcept
+            {
+                ++m_group_idx;
+                return *this;
+            }
+            
+            GroupIterator operator++(int) noexcept
+            {
+                GroupIterator tmp = *this;
+                ++m_group_idx;
+                return tmp;
+            }
+            
+            [[nodiscard]] bool operator==(const GroupIterator& other) const noexcept = default;
+            [[nodiscard]] bool operator!=(const GroupIterator& other) const noexcept = default;
+        };
+        
+        [[nodiscard]] GroupIterator GroupBegin() noexcept
+        {
+            return GroupIterator(this, 0);
+        }
+        
+        [[nodiscard]] GroupIterator GroupEnd() noexcept
+        {
+            return GroupIterator(this, m_num_groups);
+        }
+        
+        // Apply function to all elements in groups of 16
+        template<typename Func>
+        void ForEachGroup(Func&& func)
+        {
+            for (SizeType group_idx = 0; group_idx < m_num_groups; ++group_idx)
+            {
+                std::uint16_t occupied = m_groups[group_idx].MatchOccupied();
+                if (occupied == 0) continue;
+                
+                // Prefetch next group
+                if (group_idx + 1 < m_num_groups)
+                {
+                    Simd::Ops::PrefetchT0(&m_groups[group_idx + 1]);
+                }
+                
+                GroupView view{
+                    &m_groups[group_idx],
+                    &m_slots[group_idx * GROUP_SIZE],
+                    group_idx,
+                    occupied
+                };
+                
+                func(view);
+            }
+        }
+        
+        // Get statistics about group occupancy for optimization
+        struct GroupStats
+        {
+            SizeType total_groups;
+            SizeType empty_groups;
+            SizeType full_groups;
+            SizeType partial_groups;
+            float average_occupancy;
+        };
+        
+        [[nodiscard]] GroupStats GetGroupStats() const noexcept
+        {
+            GroupStats stats{m_num_groups, 0, 0, 0, 0.0f};
+            SizeType total_occupied = 0;
+            
+            for (SizeType i = 0; i < m_num_groups; ++i)
+            {
+                std::uint16_t occupied = m_groups[i].MatchOccupied();
+                int count = std::popcount(occupied);
+                
+                if (count == 0)
+                    ++stats.empty_groups;
+                else if (count == GROUP_SIZE)
+                    ++stats.full_groups;
+                else
+                    ++stats.partial_groups;
+                    
+                total_occupied += count;
+            }
+            
+            stats.average_occupancy = m_num_groups > 0 ? 
+                static_cast<float>(total_occupied) / (m_num_groups * GROUP_SIZE) : 0.0f;
+                
+            return stats;
+        }
+        
+    private:
+        void AllocateStorage(SizeType capacity)
+        {
+            m_capacity = capacity;
+            m_num_groups = (capacity + GROUP_SIZE - 1) / GROUP_SIZE;
+            
+            m_groups = m_group_alloc.allocate(m_num_groups);
+            m_slots = m_slot_alloc.allocate(capacity);
+            
+            // Initialize groups
+            for (SizeType i = 0; i < m_num_groups; ++i)
+            {
+                std::allocator_traits<GroupAllocator>::construct(m_group_alloc, &m_groups[i]);
+            }
+        }
+        
+        void DeallocateStorage() noexcept
+        {
+            if (m_groups)
+            {
+                // Destroy all Group objects before deallocating
+                for (SizeType i = 0; i < m_num_groups; ++i)
+                {
+                    std::allocator_traits<GroupAllocator>::destroy(m_group_alloc, &m_groups[i]);
+                }
+                m_group_alloc.deallocate(m_groups, m_num_groups);
+                m_groups = nullptr;
+            }
+            if (m_slots)
+            {
+                m_slot_alloc.deallocate(m_slots, m_capacity);
+                m_slots = nullptr;
+            }
+            m_capacity = 0;
+            m_num_groups = 0;
+        }
+        
+        void ReserveForInsert()
+        {
+            if (m_capacity == 0)
+            {
+                Rehash(MIN_CAPACITY);
+            }
+            else if (m_size + m_tombstone_count + 1 > m_capacity * MAX_LOAD_FACTOR)
+            {
+                Rehash(m_capacity * 2);
+            }
+            else if (m_tombstone_count > m_capacity * 0.25f)
+            {
+                // Trigger rehash when tombstones exceed 25%
+                // Same size, clean tombstones
+                Rehash(m_capacity);
+            }
+        }
+        
+        void Rehash(SizeType new_capacity)
+        {
+            auto old_groups = m_groups;
+            auto old_slots = m_slots;
+            auto old_capacity = m_capacity;
+            auto old_num_groups = m_num_groups;
+
+            m_groups = nullptr;
+            m_slots = nullptr;
+            m_size = 0;
+            m_tombstone_count = 0;
+
+            AllocateStorage(new_capacity);
+
+            for (SizeType i = 0; i < old_capacity; ++i)
+            {
+                SizeType group_idx = i / GROUP_SIZE;
+                SizeType slot_idx = i % GROUP_SIZE;
+
+                std::uint8_t meta = old_groups[group_idx].Get(slot_idx);
+                if (meta != EMPTY && meta != TOMBSTONE)
+                {
+                    // Move the entire pair at once
+                    ValueType* old_pair = old_slots[i].GetValue();
+
+                    // Use placement new to move-construct directly
+                    // This avoids the const issue entirely
+                    Emplace(std::move(old_pair->first), std::move(old_pair->second));
+
+                    // Now destroy the old pair
+                    std::allocator_traits<AllocatorType>::destroy(m_alloc, old_pair);
+                }
+            }
+
+            // Destroy old groups before deallocating
+            for (SizeType i = 0; i < old_num_groups; ++i)
+            {
+                std::allocator_traits<GroupAllocator>::destroy(m_group_alloc, &old_groups[i]);
+            }
+            m_group_alloc.deallocate(old_groups, old_num_groups);
+            m_slot_alloc.deallocate(old_slots, old_capacity);
+        }
+        
+        static constexpr SizeType NextPowerOfTwo(SizeType value) noexcept
+        {
+            static_assert(std::is_unsigned_v<SizeType>, "SizeType must be an unsigned integer type");
+            if (value <= 1)
+            {
+                return 1;
+            }
+            if (value > (std::numeric_limits<SizeType>::max() >> 1) + 1)
+            {
+                return std::numeric_limits<SizeType>::max();
+            }
+            return std::bit_ceil(value);
+        }
+    };
+}
