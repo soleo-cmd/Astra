@@ -283,9 +283,7 @@ view.ForEachGroup([](const Entity* entities, size_t count,
 - [x] Group-based iteration
 - [ ] Thread-safe operations
 - [ ] Entity relationships/hierarchies
-- [ ] Prefab system
-- [ ] Serialization support
-- [ ] Unity/Unreal integration examples
+- [ ] Component System Integration
 
 ## 📄 License
 
