@@ -205,9 +205,7 @@ Astra successfully handles the theoretical maximum of 2^24 entities:
 
 ### Requirements
 - C++20 compatible compiler
-- CMake 3.20+
-- (Optional) Google Test for unit tests
-- (Optional) Google Benchmark for performance tests
+- Premake5
 
 ### Build Instructions
 
@@ -216,38 +214,15 @@ Astra successfully handles the theoretical maximum of 2^24 entities:
 git clone https://github.com/T3mps/Astra.git
 cd Astra
 
-# Create build directory
-mkdir build && cd build
+# Generate project files with Premake5
+# Windows (Visual Studio 2022)
+premake5 vs2022
 
-# Configure
-cmake .. -DCMAKE_BUILD_TYPE=Release
+# Linux (GNU Make)
+premake5 gmake2
 
-# Build
-cmake --build . --config Release
-
-# Run tests (optional)
-ctest --output-on-failure
-```
-
-### CMake Integration
-
-Add Astra to your project:
-
-```cmake
-add_subdirectory(external/Astra)
-target_link_libraries(your_target PRIVATE Astra::Astra)
-```
-
-Or using FetchContent:
-
-```cmake
-include(FetchContent)
-FetchContent_Declare(
-    Astra
-    GIT_REPOSITORY https://github.com/T3mps/Astra.git
-    GIT_TAG main
-)
-FetchContent_MakeAvailable(Astra)
+# macOS (Xcode)
+premake5 xcode4
 ```
 
 ## 📚 Examples
@@ -300,32 +275,6 @@ view.ForEachGroup([](const Entity* entities, size_t count,
 
 </details>
 
-<details>
-<summary>Performance-Critical Systems</summary>
-
-```cpp
-// Pre-reserve for known entity counts
-registry.ReserveEntities(100'000);
-registry.ReserveComponents<Position>(100'000);
-registry.ReserveComponents<Velocity>(50'000);
-
-// Batch entity creation
-std::vector<Entity> entities;
-for (int i = 0; i < 10'000; ++i) {
-    entities.push_back(registry.CreateEntity());
-}
-
-// Efficient component addition
-for (auto e : entities) {
-    registry.AddComponent<Position>(e, 
-        rand() % 1000, 
-        rand() % 1000, 
-        0.0f);
-}
-```
-
-</details>
-
 ## 🗺️ Roadmap
 
 - [x] Core ECS functionality
@@ -339,16 +288,6 @@ for (auto e : entities) {
 - [ ] Serialization support
 - [ ] Unity/Unreal integration examples
 
-## 🤝 Contributing
-
-Contributions are welcome! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
-
-Areas where contributions would be especially valuable:
-- Performance optimizations for specific platforms
-- Additional benchmarks and comparisons
-- Documentation and examples
-- Integration guides for popular game engines
-
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
@@ -357,5 +296,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 <p align="center">
 Made with ❤️ for the game development community<br/>
-<em>Questioning established patterns, one component at a time</em>
 </p>
