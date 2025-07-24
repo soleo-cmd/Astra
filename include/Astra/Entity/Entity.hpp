@@ -4,6 +4,7 @@
 #include <functional>
 #include <limits>
 #include <type_traits>
+#include "../Core/Simd.hpp"
 
 namespace Astra
 {
@@ -22,10 +23,6 @@ namespace Astra
             static constexpr auto VERSION_MASK = Traits::VERSION_MASK;
             static constexpr auto ENTITY_SHIFT = Traits::ENTITY_SHIFT;
             
-        private:
-            EntityType m_entity;
-            
-        public:
             constexpr BasicEntity() noexcept 
                 : m_entity{Traits::NULL_VALUE} {}
                 
@@ -47,17 +44,17 @@ namespace Astra
             
             [[nodiscard]] constexpr BasicEntity NextVersion() const noexcept
             {
-                const auto current_version = Version();
-                const auto current_index = Index();
+                const auto currentVersion = Version();
+                const auto currentIndex = Index();
                 
                 // Check for version overflow
-                if (current_version >= VERSION_MASK)
+                if (currentVersion >= VERSION_MASK)
                 {
                     // Return invalid entity on overflow
                     return BasicEntity(Traits::NULL_VALUE);
                 }
                 
-                return BasicEntity(current_index, current_version + 1);
+                return BasicEntity(currentIndex, currentVersion + 1);
             }
             
             [[nodiscard]] constexpr EntityType Value() const noexcept
@@ -88,6 +85,9 @@ namespace Astra
             {
                 return BasicEntity();
             }
+            
+        private:
+            EntityType m_entity;
         };
     }
     
@@ -119,6 +119,21 @@ namespace Astra
     inline constexpr EntityID NULL_ENTITY = std::numeric_limits<EntityID>::max();
     
     constexpr std::size_t MAX_ENTITIES = EntityTraits32::ENTITY_MASK;  // 16,777,215 entities max
+
+    struct EntityHash
+    {
+        std::size_t operator()(const Entity& entity) const noexcept
+        {
+            uint64_t hash = entity.Value();
+            hash = Simd::Ops::HashCombine(hash, 0x9E3779B97F4A7C15ULL);
+            if ((hash & 0x7F) == 0)
+            {
+                // Ensure valid H2
+                hash |= 1;
+            }
+            return hash;
+        }
+    };
 }
 
 namespace std

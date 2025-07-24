@@ -30,10 +30,6 @@ namespace Astra
      */
     class Registry
     {
-    private:
-        EntityPool m_entities;
-        ComponentStorage<> m_components;  // Uses default IComponentPool
-        
     public:
         Registry() = default;
         
@@ -306,5 +302,10 @@ namespace Astra
                 pool->Remove(entity);
             });
         }
+        
+    private:
+        // Member variables (declared last in private section)
+        EntityPool m_entities;
+        ComponentStorage<> m_components;  // Uses default IComponentPool
     };
 }

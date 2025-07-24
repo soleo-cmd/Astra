@@ -27,17 +27,6 @@ namespace Astra
     template<typename BaseType = IComponentPool, std::size_t MaxCount = MAX_COMPONENTS>
     class ComponentStorage
     {
-    private:
-        std::array<std::unique_ptr<BaseType>, MaxCount> m_storage{};
-        std::bitset<MaxCount> m_registered{};
-        std::size_t m_count = 0;
-
-        template<typename T>
-        static void ValidateType()
-        {
-            static_assert(std::is_base_of_v<BaseType, T>, "Type must derive from BaseType");
-        }
-
     public:
         /**
         * Get or create a component pool for type T.
@@ -216,5 +205,17 @@ namespace Astra
 
         [[nodiscard]] iterator begin() const noexcept { return iterator(this, 0); }
         [[nodiscard]] iterator end() const noexcept { return iterator(this, MaxCount); }
+        
+    private:
+        template<typename T>
+        static void ValidateType()
+        {
+            static_assert(std::is_base_of_v<BaseType, T>, "Type must derive from BaseType");
+        }
+        
+        // Member variables (declared last in private section)
+        std::array<std::unique_ptr<BaseType>, MaxCount> m_storage{};
+        std::bitset<MaxCount> m_registered{};
+        std::size_t m_count = 0;
     };
 }

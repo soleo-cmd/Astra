@@ -30,7 +30,7 @@ namespace Astra
     template<bool IsConst, typename... Components>
     class BasicView
     {
-    private:
+    public:
         static constexpr std::size_t ComponentCount = sizeof...(Components);
         
         // Choose const or non-const pool pointers based on IsConst
@@ -42,36 +42,7 @@ namespace Astra
         using ComponentPtr = std::conditional_t<IsConst, const T*, T*>;
         
         using PoolTuple = std::tuple<PoolPtr<Components>...>;
-        
-        PoolTuple m_pools;
-        
-        // Get the pool with the smallest size for optimal iteration
         using PoolInterface = std::conditional_t<IsConst, const IComponentPool*, IComponentPool*>;
-        
-        [[nodiscard]] PoolInterface GetSmallestPool() const noexcept
-        {
-            // Check if any pool is null - if so, return nullptr (no matches possible)
-            bool any_null = false;
-            std::apply([&](auto*... pools) {
-                ((pools == nullptr ? any_null = true : false), ...);
-            }, m_pools);
-            
-            if (any_null)
-            {
-                return nullptr;
-            }
-            
-            PoolInterface smallest = nullptr;
-            std::size_t minSize = std::numeric_limits<std::size_t>::max();
-            
-            std::apply([&](auto*... pools) {
-                ((pools && pools->Size() < minSize ? (smallest = pools, minSize = pools->Size()) : false), ...);
-            }, m_pools);
-            
-            return smallest;
-        }
-        
-    public:
         /**
          * Construct a view from component pools.
          * @param pools Pointers to component pools (can be nullptr)
@@ -93,13 +64,13 @@ namespace Astra
             using BasePoolPtr = std::conditional_t<IsConstIter, const IComponentPool*, IComponentPool*>;
             
             ViewPtr m_view;
-            BasePoolPtr m_base_pool;
+            BasePoolPtr m_basePool;
             const Entity* m_current;
             const Entity* m_end;
             
             // Current entity and components
-            Entity m_current_entity;
-            std::tuple<typename BasicView::template ComponentPtr<Components>...> m_current_components;
+            Entity m_currentEntity;
+            std::tuple<typename BasicView::template ComponentPtr<Components>...> m_currentComponents;
             bool m_valid = false;
             
             // Advance to next valid entity
@@ -107,7 +78,7 @@ namespace Astra
             {
                 while (m_current != m_end)
                 {
-                    m_current_entity = *m_current;
+                    m_currentEntity = *m_current;
                     
                     // Try to get all components
                     if (TryGetComponents())
@@ -120,7 +91,7 @@ namespace Astra
                 }
                 
                 m_valid = false;
-                m_current_entity = Entity::Null();
+                m_currentEntity = Entity::Null();
             }
             
             // Try to get all components for current entity
@@ -133,12 +104,12 @@ namespace Astra
             bool TryGetComponentsImpl(std::index_sequence<Is...>) noexcept
             {
                 // Helper lambda to check and get component
-                auto check_component = [this](auto pool_index) -> bool {
-                    auto* pool = std::get<pool_index.value>(m_view->m_pools);
+                auto check_component = [this](auto poolIndex) -> bool {
+                    auto* pool = std::get<poolIndex.value>(m_view->m_pools);
                     if (!pool) return false;
                     
-                    std::get<pool_index.value>(m_current_components) = pool->TryGet(m_current_entity);
-                    return std::get<pool_index.value>(m_current_components) != nullptr;
+                    std::get<poolIndex.value>(m_currentComponents) = pool->TryGet(m_currentEntity);
+                    return std::get<poolIndex.value>(m_currentComponents) != nullptr;
                 };
                 
                 // Use simple fold expression with && operator
@@ -154,10 +125,10 @@ namespace Astra
             using pointer = value_type*;
             using reference = value_type;
             
-            iterator_base() noexcept : m_view(nullptr), m_base_pool(nullptr), m_current(nullptr), m_end(nullptr), m_valid(false) {}
+            iterator_base() noexcept : m_view(nullptr), m_basePool(nullptr), m_current(nullptr), m_end(nullptr), m_valid(false) {}
             
             iterator_base(ViewPtr view, BasePoolPtr base_pool, const Entity* current, const Entity* end) noexcept
-                : m_view(view), m_base_pool(base_pool), m_current(current), m_end(end)
+                : m_view(view), m_basePool(base_pool), m_current(current), m_end(end)
             {
                 if (m_current != m_end)
                 {
@@ -168,8 +139,8 @@ namespace Astra
             [[nodiscard]] reference operator*() const noexcept
             {
                 return std::apply([this](auto*... components) {
-                    return std::forward_as_tuple(m_current_entity, *components...);
-                }, m_current_components);
+                    return std::forward_as_tuple(m_currentEntity, *components...);
+                }, m_currentComponents);
             }
             
             iterator_base& operator++() noexcept
@@ -224,15 +195,15 @@ namespace Astra
             
             // Use the entity array from the smallest pool
             const Entity* entities = smallest->GetEntities();
-            const Entity* entities_end = entities + smallest->GetEntityCount();
+            const Entity* entitiesEnd = entities + smallest->GetEntityCount();
             
             if constexpr (IsConst)
             {
-                return const_iterator(this, smallest, entities, entities_end);
+                return const_iterator(this, smallest, entities, entitiesEnd);
             }
             else
             {
-                return iterator(this, smallest, entities, entities_end);
+                return iterator(this, smallest, entities, entitiesEnd);
             }
         }
         
@@ -246,9 +217,9 @@ namespace Astra
             
             // Use the entity array from the smallest pool
             const Entity* entities = smallest->GetEntities();
-            const Entity* entities_end = entities + smallest->GetEntityCount();
+            const Entity* entitiesEnd = entities + smallest->GetEntityCount();
             
-            return const_iterator(this, smallest, entities, entities_end);
+            return const_iterator(this, smallest, entities, entitiesEnd);
         }
         
         /**
@@ -283,7 +254,7 @@ namespace Astra
          * Get approximate size (upper bound).
          * Actual size may be smaller due to component filtering.
          */
-        [[nodiscard]] std::size_t size_hint() const noexcept
+        [[nodiscard]] std::size_t SizeHint() const noexcept
         {
             auto* smallest = GetSmallestPool();
             return smallest ? smallest->Size() : 0;
@@ -320,30 +291,30 @@ namespace Astra
             
             // Get entities from the smallest pool
             const Entity* entities = smallest->GetEntities();
-            const std::size_t entity_count = smallest->GetEntityCount();
+            const std::size_t entityCount = smallest->GetEntityCount();
             
             // Process in batches of 16 for SIMD alignment
             constexpr std::size_t BATCH_SIZE = 16;
             
-            for (std::size_t i = 0; i < entity_count; i += BATCH_SIZE)
+            for (std::size_t i = 0; i < entityCount; i += BATCH_SIZE)
             {
-                std::size_t batch_size = std::min(BATCH_SIZE, entity_count - i);
+                std::size_t batchSize = std::min(BATCH_SIZE, entityCount - i);
                 
                 // Arrays to hold the batch data
-                Entity entity_batch[BATCH_SIZE];
-                std::tuple<std::array<ComponentPtr<Components>, BATCH_SIZE>...> component_batches;
+                Entity entityBatch[BATCH_SIZE];
+                std::tuple<std::array<ComponentPtr<Components>, BATCH_SIZE>...> componentBatches;
                 
                 // Copy entities for this batch
-                std::copy_n(entities + i, batch_size, entity_batch);
+                std::copy_n(entities + i, batchSize, entityBatch);
                 
                 // Use FindBatch to get components from all pools
-                bool all_valid = ProcessBatch(entity_batch, batch_size, component_batches);
+                bool allValid = ProcessBatch(entityBatch, batchSize, componentBatches);
                 
-                if (all_valid)
+                if (allValid)
                 {
                     // Call the function with the batch data
-                    CallFuncWithBatch(std::forward<Func>(func), entity_batch, batch_size, 
-                                      component_batches, std::index_sequence_for<Components...>{});
+                    CallFuncWithBatch(std::forward<Func>(func), entityBatch, batchSize, 
+                                      componentBatches, std::index_sequence_for<Components...>{});
                 }
             }
         }
@@ -351,70 +322,98 @@ namespace Astra
     private:
         // Helper to process a batch of entities and get their components
         template<typename ComponentBatches>
-        bool ProcessBatch(const Entity* entities, std::size_t batch_size, ComponentBatches& batches) noexcept
+        bool ProcessBatch(const Entity* entities, std::size_t batchSize, ComponentBatches& batches) noexcept
         {
-            return ProcessBatchImpl(entities, batch_size, batches, std::index_sequence_for<Components...>{});
+            return ProcessBatchImpl(entities, batchSize, batches, std::index_sequence_for<Components...>{});
         }
         
         template<typename ComponentBatches, std::size_t... Is>
-        bool ProcessBatchImpl(const Entity* entities, std::size_t batch_size, 
+        bool ProcessBatchImpl(const Entity* entities, std::size_t batchSize, 
                               ComponentBatches& batches, std::index_sequence<Is...>) noexcept
         {
             // Helper to use the pool's optimized batch lookup
-            auto process_pool = [&](auto pool_index) -> std::size_t {
-                auto* pool = std::get<pool_index.value>(m_pools);
+            auto processPool = [&](auto poolIndex) -> std::size_t {
+                auto* pool = std::get<poolIndex.value>(m_pools);
                 if (!pool) return 0;
                 
-                auto& batch_array = std::get<pool_index.value>(batches);
+                auto& batchArray = std::get<poolIndex.value>(batches);
                 
                 // Use pool's optimized GetBatch method which leverages FindBatch
-                // Note: We need to handle the case where batch_size might be less than 16
+                // Note: We need to handle the case where batchSize might be less than 16
                 if constexpr (IsConst)
                 {
                     // For const views, we need to manually get components since GetBatch returns non-const
                     std::size_t found = 0;
-                    for (std::size_t j = 0; j < batch_size; ++j)
+                    for (std::size_t j = 0; j < batchSize; ++j)
                     {
-                        batch_array[j] = pool->TryGet(entities[j]);
-                        if (batch_array[j]) found++;
+                        batchArray[j] = pool->TryGet(entities[j]);
+                        if (batchArray[j]) found++;
                     }
                     return found;
                 }
                 else
                 {
                     // For non-const views, we can use GetBatch directly
-                    Entity entity_array[16];
-                    std::copy_n(entities, batch_size, entity_array);
+                    Entity entityArray[16];
+                    std::copy_n(entities, batchSize, entityArray);
                     
-                    using ComponentType = typename std::tuple_element<pool_index.value, std::tuple<Components...>>::type;
-                    ComponentType* component_array[16];
+                    using ComponentType = typename std::tuple_element<poolIndex.value, std::tuple<Components...>>::type;
+                    ComponentType* componentArray[16];
                     
-                    std::size_t found = pool->GetBatch(entity_array, component_array);
+                    std::size_t found = pool->GetBatch(entityArray, componentArray);
                     
                     // Copy results to our batch array
-                    for (std::size_t j = 0; j < batch_size; ++j)
+                    for (std::size_t j = 0; j < batchSize; ++j)
                     {
-                        batch_array[j] = (j < found) ? component_array[j] : nullptr;
+                        batchArray[j] = (j < found) ? componentArray[j] : nullptr;
                     }
                     return found;
                 }
             };
             
-            // Check all pools - all must return batch_size for success
-            std::size_t min_found = batch_size;
-            ((min_found = std::min(min_found, process_pool(std::integral_constant<std::size_t, Is>{}))), ...);
+            // Check all pools - all must return batchSize for success
+            std::size_t minFound = batchSize;
+            ((minFound = std::min(minFound, processPool(std::integral_constant<std::size_t, Is>{}))), ...);
             
-            return min_found == batch_size;
+            return minFound == batchSize;
         }
         
         // Helper to call the user function with batch data
         template<typename Func, typename ComponentBatches, std::size_t... Is>
-        void CallFuncWithBatch(Func&& func, const Entity* entities, std::size_t batch_size,
+        void CallFuncWithBatch(Func&& func, const Entity* entities, std::size_t batchSize,
                                ComponentBatches& batches, std::index_sequence<Is...>)
         {
             // Extract component arrays and call function
-            func(entities, batch_size, std::get<Is>(batches).data()...);
+            func(entities, batchSize, std::get<Is>(batches).data()...);
         }
+        
+    private:
+        // Private member functions
+        [[nodiscard]] PoolInterface GetSmallestPool() const noexcept
+        {
+            // Check if any pool is null - if so, return nullptr (no matches possible)
+            bool anyNull = false;
+            std::apply([&](auto*... pools) {
+                ((pools == nullptr ? anyNull = true : false), ...);
+            }, m_pools);
+            
+            if (anyNull)
+            {
+                return nullptr;
+            }
+            
+            PoolInterface smallest = nullptr;
+            std::size_t minSize = std::numeric_limits<std::size_t>::max();
+            
+            std::apply([&](auto*... pools) {
+                ((pools && pools->Size() < minSize ? (smallest = pools, minSize = pools->Size()) : false), ...);
+            }, m_pools);
+            
+            return smallest;
+        }
+        
+        // Member variables (declared last in private section)
+        PoolTuple m_pools;
     };
     
     // Convenience aliases
@@ -428,11 +427,8 @@ namespace Astra
     template<bool IsConst, typename Component>
     class BasicView<IsConst, Component>
     {
-    private:
-        using PoolPtr = std::conditional_t<IsConst, const ComponentPool<Component>*, ComponentPool<Component>*>;
-        PoolPtr m_pool;
-        
     public:
+        using PoolPtr = std::conditional_t<IsConst, const ComponentPool<Component>*, ComponentPool<Component>*>;
         explicit BasicView(PoolPtr pool) noexcept : m_pool(pool) {}
         
         // For single component views, we can directly use the FlatMap's iterator
@@ -505,5 +501,9 @@ namespace Astra
                 m_pool->ForEachGroup(std::forward<Func>(func));
             }
         }
+        
+    private:
+        // Member variables (declared last in private section)
+        PoolPtr m_pool;
     };
 }

@@ -53,27 +53,16 @@ namespace Astra
     {
         static_assert(Component<T>, "T must satisfy Component concept");
 
-        // Allow BasicView to access internals for efficient iteration
-        template<bool, typename...>
-        friend class BasicView;
-
-    private:
-        // Primary storage - direct Entity to Component mapping using FlatMap
-        FlatMap<Entity, T> m_components;
-        
-        // Cache entity list for fast iteration
-        mutable std::vector<Entity> m_entity_cache;
-        mutable bool m_cache_dirty = true;
-        
-        // Component metadata
-        ComponentID m_component_id;
-
     public:
         using ComponentType = T;
         using SizeType = std::size_t;
 
+        // Allow BasicView to access internals for efficient iteration
+        template<bool, typename...>
+        friend class BasicView;
+
         ComponentPool() 
-            : m_component_id(TypeID<T>::Value())
+            : m_componentId(TypeID<T>::Value())
         {
             // Pre-reserve some capacity for common use cases
             m_components.Reserve(1024);
@@ -89,7 +78,7 @@ namespace Astra
             auto [it, inserted] = m_components.Emplace(entity, std::forward<Args>(args)...);
             if (inserted)
             {
-                m_cache_dirty = true;
+                m_cacheDirty = true;
                 return &it->second;
             }
             return nullptr;
@@ -102,7 +91,7 @@ namespace Astra
         template<typename... Args>
         T* Set(Entity entity, Args&&... args)
         {
-            m_cache_dirty = true;
+            m_cacheDirty = true;
             return &(m_components[entity] = T(std::forward<Args>(args)...));
         }
 
@@ -143,7 +132,7 @@ namespace Astra
 
         bool Remove(Entity entity) noexcept override
         {
-            m_cache_dirty = true;
+            m_cacheDirty = true;
             return m_components.Erase(entity) > 0;
         }
 
@@ -160,19 +149,19 @@ namespace Astra
         void Clear() noexcept override
         {
             m_components.Clear();
-            m_entity_cache.clear();
-            m_cache_dirty = true;
+            m_entityCache.clear();
+            m_cacheDirty = true;
         }
 
         void Reserve(std::size_t capacity) override
         {
             m_components.Reserve(capacity);
-            m_entity_cache.reserve(capacity);
+            m_entityCache.reserve(capacity);
         }
 
         [[nodiscard]] ComponentID GetComponentID() const noexcept override
         {
-            return m_component_id;
+            return m_componentId;
         }
 
         [[nodiscard]] std::string_view GetComponentName() const noexcept override
@@ -188,7 +177,7 @@ namespace Astra
         [[nodiscard]] const Entity* GetEntities() const noexcept override
         {
             UpdateEntityCache();
-            return m_entity_cache.data();
+            return m_entityCache.data();
         }
 
         [[nodiscard]] std::size_t GetEntityCount() const noexcept override
@@ -199,7 +188,7 @@ namespace Astra
         void ShrinkToFit() override
         {
             // FlatMap doesn't have shrink_to_fit yet
-            m_entity_cache.shrink_to_fit();
+            m_entityCache.shrink_to_fit();
         }
 
         // Direct iteration over components
@@ -226,10 +215,10 @@ namespace Astra
         template<typename Func>
         void ProcessInBatches(Func&& func, std::size_t batch_size = 16)
         {
-            std::vector<Entity> entity_batch;
-            std::vector<T*> component_batch;
-            entity_batch.reserve(batch_size);
-            component_batch.reserve(batch_size);
+            std::vector<Entity> entityBatch;
+            std::vector<T*> componentBatch;
+            entityBatch.reserve(batch_size);
+            componentBatch.reserve(batch_size);
             
             m_components.ForEachGroup([&](auto& group_view)
             {
@@ -240,22 +229,22 @@ namespace Astra
                 // Fill batch vectors
                 for (std::size_t i = 0; i < count; ++i)
                 {
-                    entity_batch.push_back(ptrs[i]->first);
-                    component_batch.push_back(&ptrs[i]->second);
+                    entityBatch.push_back(ptrs[i]->first);
+                    componentBatch.push_back(&ptrs[i]->second);
                     
-                    if (entity_batch.size() == batch_size)
+                    if (entityBatch.size() == batch_size)
                     {
-                        func(entity_batch.data(), component_batch.data(), batch_size);
-                        entity_batch.clear();
-                        component_batch.clear();
+                        func(entityBatch.data(), componentBatch.data(), batch_size);
+                        entityBatch.clear();
+                        componentBatch.clear();
                     }
                 }
             });
             
             // Process remaining items
-            if (!entity_batch.empty())
+            if (!entityBatch.empty())
             {
-                func(entity_batch.data(), component_batch.data(), entity_batch.size());
+                func(entityBatch.data(), componentBatch.data(), entityBatch.size());
             }
         }
         
@@ -293,20 +282,27 @@ namespace Astra
         }
         
     private:
+        // Private member functions
         void UpdateEntityCache() const
         {
-            if (m_cache_dirty)
+            if (m_cacheDirty)
             {
-                m_entity_cache.clear();
-                m_entity_cache.reserve(m_components.Size());
+                m_entityCache.clear();
+                m_entityCache.reserve(m_components.Size());
                 
                 for (const auto& [entity, component] : m_components)
                 {
-                    m_entity_cache.push_back(entity);
+                    m_entityCache.push_back(entity);
                 }
                 
-                m_cache_dirty = false;
+                m_cacheDirty = false;
             }
         }
+        
+        // Member variables (declared last in private section)
+        FlatMap<Entity, T> m_components;
+        mutable std::vector<Entity> m_entityCache;
+        mutable bool m_cacheDirty = true;
+        ComponentID m_componentId;
     };
 }
