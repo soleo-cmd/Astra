@@ -2,28 +2,28 @@
 
 #include <cstdint>
 #include <cstring>
-#include "Platform.hpp"
+#include "Base.hpp"
 
 #if defined(ASTRA_ARCH_X64) || defined(ASTRA_ARCH_X86)
-    #if defined(ASTRA_COMPILER_MSVC)
-        #include <intrin.h>
-        #include <nmmintrin.h>  // SSE4.2
-    #else
-        #include <x86intrin.h>
-    #endif
+#if defined(ASTRA_COMPILER_MSVC)
+#include <intrin.h>
+#include <nmmintrin.h>  // SSE4.2
+#else
+#include <x86intrin.h>
+#endif
 
-    #ifdef __SSE2__
-        #define ASTRA_HAS_SSE2 1
-    #endif
-    #ifdef __SSE4_2__
-        #define ASTRA_HAS_SSE42 1
-    #endif
+#ifdef __SSE2__
+#define ASTRA_HAS_SSE2 1
+#endif
+#ifdef __SSE4_2__
+#define ASTRA_HAS_SSE42 1
+#endif
 #elif defined(ASTRA_ARCH_ARM64) || defined(ASTRA_ARCH_ARM32)
-    #include <arm_neon.h>
-    #define ASTRA_HAS_NEON 1
-    #if defined(__ARM_FEATURE_CRC32)
-        #define ASTRA_HAS_ARM_CRC32 1
-    #endif
+#include <arm_neon.h>
+#define ASTRA_HAS_NEON 1
+#if defined(__ARM_FEATURE_CRC32)
+#define ASTRA_HAS_ARM_CRC32 1
+#endif
 #endif
 
 namespace Astra::Simd
@@ -177,7 +177,7 @@ namespace Astra::Simd
         ASTRA_FORCEINLINE void PrefetchRead(const void* ptr, PrefetchHint hint = PrefetchHint::T0) noexcept
         {
 #if defined(ASTRA_ARCH_X64) || defined(ASTRA_ARCH_X86)
-    #if defined(ASTRA_COMPILER_MSVC)
+#if defined(ASTRA_COMPILER_MSVC)
             switch (hint)
             {
                 case PrefetchHint::T0:  _mm_prefetch(static_cast<const char*>(ptr), _MM_HINT_T0); break;
@@ -185,7 +185,7 @@ namespace Astra::Simd
                 case PrefetchHint::T2:  _mm_prefetch(static_cast<const char*>(ptr), _MM_HINT_T2); break;
                 case PrefetchHint::NTA: _mm_prefetch(static_cast<const char*>(ptr), _MM_HINT_NTA); break;
             }
-    #else
+#else
             // GCC/Clang x86 intrinsics
             switch (hint)
             {
@@ -194,7 +194,7 @@ namespace Astra::Simd
                 case PrefetchHint::T2:  __builtin_prefetch(ptr, 0, 1); break;  // locality 1 = L3 and up
                 case PrefetchHint::NTA: __builtin_prefetch(ptr, 0, 0); break;  // locality 0 = no temporal locality
             }
-    #endif
+#endif
 #elif ASTRA_HAS_BUILTIN(__builtin_prefetch)
             // Generic builtin prefetch (ARM, etc.)
             int locality = 3 - static_cast<int>(hint);  // Convert hint to locality

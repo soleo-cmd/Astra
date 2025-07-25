@@ -7,7 +7,6 @@
 #include "../Component/Component.hpp"
 #include "../Component/ComponentPool.hpp"
 #include "../Component/ComponentStorage.hpp"
-#include "../Core/Platform.hpp"
 #include "../Entity/EntityPool.hpp"
 #include "View.hpp"
 

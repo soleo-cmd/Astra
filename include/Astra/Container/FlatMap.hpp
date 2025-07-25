@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "../Core/Platform.hpp"
+#include "../Core/Base.hpp"
 #include "../Core/Error.hpp"
 #include "../Core/Result.hpp"
 #include "../Core/Simd.hpp"
@@ -33,7 +33,6 @@ namespace Astra
     // FlatMap: A high-performance hash map with SwissTable-inspired design
     // - SIMD-accelerated metadata scanning
     // - Cache-friendly memory layout with prefetching
-    // - Tombstone collapsing for better performance after deletions
     //
     // Thread Safety: This container is NOT thread-safe. Concurrent access
     // to non-const methods requires external synchronization.
@@ -91,7 +90,8 @@ namespace Astra
         
         struct Group
         {
-            alignas(16) std::uint8_t metadata[GROUP_SIZE];
+            // Aligned for SIMD operations (SSE/NEON use 128-bit registers)
+            ASTRA_SIMD_ALIGNED std::uint8_t metadata[GROUP_SIZE];
             
             Group() noexcept
             {

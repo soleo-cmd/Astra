@@ -4,6 +4,7 @@
 #include <functional>
 #include <limits>
 #include <type_traits>
+#include <concepts>
 #include "../Core/Simd.hpp"
 
 namespace Astra
@@ -12,7 +13,27 @@ namespace Astra
     
     namespace internal
     {
-        template<typename Traits>
+        // Concept for EntityTraits to ensure type safety
+        template<typename T>
+        concept EntityTraitsConcept = requires {
+            typename T::entity_type;
+            typename T::version_type;
+            
+            { T::ENTITY_SHIFT } -> std::convertible_to<std::size_t>;
+            { T::ENTITY_MASK } -> std::convertible_to<typename T::entity_type>;
+            { T::VERSION_MASK } -> std::convertible_to<typename T::entity_type>;
+            { T::NULL_VALUE } -> std::convertible_to<typename T::entity_type>;
+            
+            // Ensure entity_type is an unsigned integral type
+            requires std::is_unsigned_v<typename T::entity_type>;
+            requires std::is_integral_v<typename T::entity_type>;
+            
+            // Ensure version_type is an unsigned integral type
+            requires std::is_unsigned_v<typename T::version_type>;
+            requires std::is_integral_v<typename T::version_type>;
+        };
+        
+        template<EntityTraitsConcept Traits>
         class BasicEntity
         {
         public:
@@ -83,7 +104,7 @@ namespace Astra
             // Static factory for null entity
             [[nodiscard]] static constexpr BasicEntity Null() noexcept
             {
-                return BasicEntity();
+                return BasicEntity(Traits::NULL_VALUE);
             }
             
         private:
@@ -116,7 +137,7 @@ namespace Astra
     using Entity = internal::BasicEntity<EntityTraits32>;
     using Entity64 = internal::BasicEntity<EntityTraits64>;
     
-    inline constexpr EntityID NULL_ENTITY = std::numeric_limits<EntityID>::max();
+    inline constexpr EntityID NULL_ENTITY = EntityTraits32::NULL_VALUE;
     
     constexpr std::size_t MAX_ENTITIES = EntityTraits32::ENTITY_MASK;  // 16,777,215 entities max
 
@@ -143,7 +164,7 @@ namespace std
     {
         [[nodiscard]] std::size_t operator()(const Astra::Entity& entity) const noexcept
         {
-            return std::hash<Astra::EntityID>{}(entity.Value());
+            return Astra::EntityHash{}(entity);
         }
     };
     

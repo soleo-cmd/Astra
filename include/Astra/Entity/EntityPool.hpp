@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "Entity.hpp"
-#include "../Core/Platform.hpp"
+#include "../Core/Base.hpp"
 #include "../Core/Error.hpp"
 
 namespace Astra
