@@ -7,7 +7,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "Config.hpp"
+#include "Platform.hpp"
 
 namespace Astra
 {

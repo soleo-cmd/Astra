@@ -66,7 +66,7 @@ namespace Astra
             {
                 return m_entity != Traits::NULL_VALUE;
             }
-            
+
             [[nodiscard]] constexpr explicit operator bool() const noexcept
             {
                 return Valid();

@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "../Core/Config.hpp"
+#include "../Core/Platform.hpp"
 #include "../Core/Error.hpp"
 #include "../Core/Result.hpp"
 #include "../Core/Simd.hpp"

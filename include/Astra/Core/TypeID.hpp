@@ -5,7 +5,6 @@
 #include <string_view>
 #include <type_traits>
 
-#include "Config.hpp"
 #include "Platform.hpp"
 
 namespace Astra
@@ -103,14 +102,11 @@ namespace Astra
         
         [[nodiscard]] static constexpr std::string_view Name() noexcept
         {
-            if constexpr (config::ENABLE_TYPE_NAMES)
-            {
-                return internal::TypeName<Type>::Value();
-            }
-            else
-            {
-                return "unknown";
-            }
+#if defined(ASTRA_COMPILER_GCC) || defined(ASTRA_COMPILER_CLANG) || defined(ASTRA_COMPILER_MSVC)
+            return internal::TypeName<Type>::Value();
+#else
+            return "unknown";
+#endif
         }
         
         [[nodiscard]] static constexpr std::uint64_t Hash() noexcept

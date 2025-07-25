@@ -285,3 +285,11 @@
 
 // Static assertion with message
 #define ASTRA_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+
+// Runtime assertion macro
+#ifdef ASTRA_BUILD_DEBUG
+    #include <cassert>
+    #define ASTRA_ASSERT(condition, message) assert((condition) && (message))
+#else
+    #define ASTRA_ASSERT(condition, message) ((void)0)
+#endif

@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "../Container/FlatMap.hpp"
-#include "../Core/Config.hpp"
+#include "../Core/Platform.hpp"
 #include "../Core/Simd.hpp"
 #include "../Core/TypeID.hpp"
 #include "../Entity/Entity.hpp"

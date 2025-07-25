@@ -5,7 +5,7 @@
 #include <memory>
 #include <type_traits>
 
-#include "../Core/Config.hpp"
+#include "../Core/Platform.hpp"
 #include "../Core/TypeID.hpp"
 #include "Component.hpp"
 #include "ComponentPool.hpp"
