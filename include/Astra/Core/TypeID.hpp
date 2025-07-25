@@ -65,9 +65,6 @@ namespace Astra
         
         class TypeIDGenerator
         {
-        private:
-            inline static std::atomic<ComponentID> s_nextId{0};
-            
         public:
             [[nodiscard]] static ComponentID Next() noexcept
             {
@@ -77,6 +74,9 @@ namespace Astra
                 // of the static variable in TypeIDStorage::Value().
                 return s_nextId.fetch_add(1, std::memory_order_relaxed);
             }
+            
+        private:
+            inline static std::atomic<ComponentID> s_nextId{0};
         };
         
         template<typename T>

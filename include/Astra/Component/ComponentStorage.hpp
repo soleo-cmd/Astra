@@ -156,18 +156,6 @@ namespace Astra
         // Iterator support for range-based for loops
         class iterator
         {
-        private:
-            const ComponentStorage* m_storage;
-            std::size_t m_index;
-
-            void AdvanceToNext() noexcept
-            {
-                while (m_index < MaxCount && !m_storage->m_registered[m_index])
-                {
-                    ++m_index;
-                }
-            }
-
         public:
             using iterator_category = std::forward_iterator_tag;
             using value_type = std::pair<ComponentID, BaseType*>;
@@ -201,6 +189,19 @@ namespace Astra
             }
 
             bool operator==(const iterator& other) const noexcept = default;
+            
+        private:
+            void AdvanceToNext() noexcept
+            {
+                while (m_index < MaxCount && !m_storage->m_registered[m_index])
+                {
+                    ++m_index;
+                }
+            }
+            
+            // Member variables (declared last in private section)
+            const ComponentStorage* m_storage;
+            std::size_t m_index;
         };
 
         [[nodiscard]] iterator begin() const noexcept { return iterator(this, 0); }

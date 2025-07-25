@@ -303,7 +303,6 @@ namespace Astra
             });
         }
         
-    private:
         // Member variables (declared last in private section)
         EntityPool m_entities;
         ComponentStorage<> m_components;  // Uses default IComponentPool

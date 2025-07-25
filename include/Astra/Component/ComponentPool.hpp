@@ -213,12 +213,12 @@ namespace Astra
         
         // SIMD-friendly batch processing
         template<typename Func>
-        void ProcessInBatches(Func&& func, std::size_t batch_size = 16)
+        void ProcessInBatches(Func&& func, std::size_t batchSize = 16)
         {
             std::vector<Entity> entityBatch;
             std::vector<T*> componentBatch;
-            entityBatch.reserve(batch_size);
-            componentBatch.reserve(batch_size);
+            entityBatch.reserve(batchSize);
+            componentBatch.reserve(batchSize);
             
             m_components.ForEachGroup([&](auto& group_view)
             {
@@ -232,9 +232,9 @@ namespace Astra
                     entityBatch.push_back(ptrs[i]->first);
                     componentBatch.push_back(&ptrs[i]->second);
                     
-                    if (entityBatch.size() == batch_size)
+                    if (entityBatch.size() == batchSize)
                     {
-                        func(entityBatch.data(), componentBatch.data(), batch_size);
+                        func(entityBatch.data(), componentBatch.data(), batchSize);
                         entityBatch.clear();
                         componentBatch.clear();
                     }
