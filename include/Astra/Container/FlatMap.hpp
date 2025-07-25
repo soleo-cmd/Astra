@@ -33,7 +33,6 @@ namespace Astra
     // FlatMap: A high-performance hash map with SwissTable-inspired design
     // - SIMD-accelerated metadata scanning
     // - Cache-friendly memory layout with prefetching
-    // - Tombstone collapsing for better performance after deletions
     //
     // Thread Safety: This container is NOT thread-safe. Concurrent access
     // to non-const methods requires external synchronization.
