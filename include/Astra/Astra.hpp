@@ -4,9 +4,9 @@
 #include "Component/ComponentPool.hpp"
 #include "Component/ComponentStorage.hpp"
 
-#include "Core/Config.hpp"
+#include "Core/Version.hpp"
 #include "Core/Error.hpp"
-#include "Core/Platform.hpp"
+#include "Core/Base.hpp"
 #include "Core/Result.hpp"
 #include "Core/TypeID.hpp"
 

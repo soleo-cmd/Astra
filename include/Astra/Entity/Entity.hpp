@@ -135,7 +135,6 @@ namespace Astra
     };
     
     using Entity = internal::BasicEntity<EntityTraits32>;
-    using Entity64 = internal::BasicEntity<EntityTraits64>;
     
     inline constexpr EntityID NULL_ENTITY = EntityTraits32::NULL_VALUE;
     
@@ -165,15 +164,6 @@ namespace std
         [[nodiscard]] std::size_t operator()(const Astra::Entity& entity) const noexcept
         {
             return Astra::EntityHash{}(entity);
-        }
-    };
-    
-    template<>
-    struct hash<Astra::Entity64>
-    {
-        [[nodiscard]] std::size_t operator()(const Astra::Entity64& entity) const noexcept
-        {
-            return std::hash<std::uint64_t>{}(entity.Value());
         }
     };
 }

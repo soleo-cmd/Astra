@@ -10,6 +10,7 @@
 
 #include "../Core/Base.hpp"
 #include "../Core/Error.hpp"
+#include "../Core/Profile.hpp"
 #include "../Core/Result.hpp"
 #include "../Core/Simd.hpp"
 #include "../Entity/Entity.hpp"
@@ -586,6 +587,7 @@ namespace Astra
         template<typename K>
         SizeType FindImpl(const K& key, std::uint8_t& h2Out) const noexcept
         {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorQuery);
             if (Empty() || !m_groups) return m_capacity;
 
             auto [h1, h2] = SplitHash(m_hasher(key));
@@ -726,6 +728,7 @@ namespace Astra
         template<typename K, typename... Args>
         std::pair<iterator, bool> Emplace(K&& key, Args&&... args)
         {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorComponent);
             ReserveForInsert();
             ASTRA_ASSERT(m_size + m_tombstoneCount < m_capacity, "Table should have space after reserve");
 
@@ -876,6 +879,7 @@ namespace Astra
         
         iterator Erase(iterator pos)
         {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorComponent);
             SizeType idx = pos.m_index;
             SizeType groupIdx = idx / GROUP_SIZE;
             SizeType slotIdx = idx % GROUP_SIZE;
@@ -957,6 +961,72 @@ namespace Astra
                 SizeType idx = FindImpl(keys[i], h2Values[i]);
                 results[i] = idx < m_capacity ? iterator(this, idx) : end();
             }
+        }
+        
+        // Const version of FindBatch
+        template<typename K, size_t N>
+        void FindBatch(const K (&keys)[N], const_iterator (&results)[N]) const noexcept
+        {
+            // Prefetch all hash computations
+            std::uint8_t h2Values[N];
+            SizeType indices[N];
+            
+            for (size_t i = 0; i < N; ++i)
+            {
+                auto [h1, h2] = SplitHash(m_hasher(keys[i]));
+                h2Values[i] = h2;
+                indices[i] = h1 & (m_capacity - 1);
+                
+                // Prefetch the group we'll need
+                SizeType groupIdx = indices[i] / GROUP_SIZE;
+                if (groupIdx < m_numGroups)
+                {
+                    Simd::Ops::PrefetchT0(&m_groups[groupIdx]);
+                }
+            }
+            
+            // Now perform lookups with data in cache
+            for (size_t i = 0; i < N; ++i)
+            {
+                SizeType idx = FindImpl(keys[i], h2Values[i]);
+                results[i] = idx < m_capacity ? const_iterator(this, idx) : end();
+            }
+        }
+        
+        // Batch get operation - returns number of successful finds
+        template<size_t N>
+        std::size_t GetBatch(const Key (&keys)[N], Value* (&values)[N]) noexcept
+        {
+            iterator results[N];
+            FindBatch(keys, results);
+            
+            std::size_t found = 0;
+            for (size_t i = 0; i < N; ++i)
+            {
+                if (results[i] != end())
+                {
+                    values[found++] = &results[i]->second;
+                }
+            }
+            return found;
+        }
+        
+        // Const version of GetBatch
+        template<size_t N>
+        std::size_t GetBatch(const Key (&keys)[N], const Value* (&values)[N]) const noexcept
+        {
+            const_iterator results[N];
+            FindBatch(keys, results);
+            
+            std::size_t found = 0;
+            for (size_t i = 0; i < N; ++i)
+            {
+                if (results[i] != end())
+                {
+                    values[found++] = &results[i]->second;
+                }
+            }
+            return found;
         }
         
         // Group-based iteration for SIMD processing
@@ -1072,6 +1142,7 @@ namespace Astra
         template<typename Func>
         void ForEachGroup(Func&& func)
         {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorQuery);
             for (SizeType groupIdx = 0; groupIdx < m_numGroups; ++groupIdx)
             {
                 std::uint16_t occupied = m_groups[groupIdx].MatchOccupied();
@@ -1091,6 +1162,70 @@ namespace Astra
                 };
                 
                 func(view);
+            }
+        }
+        
+        // Direct group access for optimized multi-component iteration (non-const)
+        template<typename Func>
+        void ForEachGroupDirect(Func&& func)
+        {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorQuery);
+            for (SizeType groupIdx = 0; groupIdx < m_numGroups; ++groupIdx)
+            {
+                std::uint16_t occupied = m_groups[groupIdx].MatchOccupied();
+                if (occupied == 0) continue;
+                
+                // Extract entities and values into arrays for this group
+                Key entities[GROUP_SIZE];
+                Value* values[GROUP_SIZE];
+                std::size_t count = 0;
+                
+                std::uint16_t mask = occupied;
+                while (mask)
+                {
+                    int slotIdx = Simd::Ops::CountTrailingZeros(mask);
+                    mask &= (mask - 1); // Clear lowest bit
+                    
+                    SizeType idx = groupIdx * GROUP_SIZE + slotIdx;
+                    entities[count] = m_slots[idx].GetValue()->first;
+                    values[count] = &m_slots[idx].GetValue()->second;
+                    count++;
+                }
+                
+                // Call function with group data
+                func(&m_groups[groupIdx].metadata[0], entities, values, count, occupied);
+            }
+        }
+        
+        // Direct group access for optimized multi-component iteration (const)
+        template<typename Func>
+        void ForEachGroupDirect(Func&& func) const
+        {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorQuery);
+            for (SizeType groupIdx = 0; groupIdx < m_numGroups; ++groupIdx)
+            {
+                std::uint16_t occupied = m_groups[groupIdx].MatchOccupied();
+                if (occupied == 0) continue;
+                
+                // Extract entities and values into arrays for this group
+                Key entities[GROUP_SIZE];
+                const Value* values[GROUP_SIZE];
+                std::size_t count = 0;
+                
+                std::uint16_t mask = occupied;
+                while (mask)
+                {
+                    int slotIdx = Simd::Ops::CountTrailingZeros(mask);
+                    mask &= (mask - 1); // Clear lowest bit
+                    
+                    SizeType idx = groupIdx * GROUP_SIZE + slotIdx;
+                    entities[count] = m_slots[idx].GetValue()->first;
+                    values[count] = &m_slots[idx].GetValue()->second;
+                    count++;
+                }
+                
+                // Call function with group data
+                func(&m_groups[groupIdx].metadata[0], entities, values, count, occupied);
             }
         }
         
@@ -1187,6 +1322,7 @@ namespace Astra
         
         void Rehash(SizeType newCapacity)
         {
+            ASTRA_PROFILE_ZONE_NAMED_COLOR("FlatMap::Rehash", Profile::ColorMemory);
             auto oldGroups = m_groups;
             auto oldSlots = m_slots;
             auto oldCapacity = m_capacity;

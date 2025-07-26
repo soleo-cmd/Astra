@@ -7,6 +7,7 @@
 #include "../Component/Component.hpp"
 #include "../Component/ComponentPool.hpp"
 #include "../Component/ComponentStorage.hpp"
+#include "../Core/Profile.hpp"
 #include "../Entity/EntityPool.hpp"
 #include "View.hpp"
 
@@ -46,6 +47,7 @@ namespace Astra
          */
         [[nodiscard]] Entity CreateEntity()
         {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorEntity);
             return m_entities.Create();
         }
         
@@ -56,6 +58,7 @@ namespace Astra
          */
         bool DestroyEntity(Entity entity)
         {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorEntity);
             if (!m_entities.IsValid(entity))
             {
                 return false;
@@ -98,6 +101,7 @@ namespace Astra
         template<typename T, typename... Args>
         T* AddComponent(Entity entity, Args&&... args)
         {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorComponent);
             static_assert(Component<T>, "T must satisfy Component concept");
             
             if (!m_entities.IsValid(entity))
@@ -184,6 +188,7 @@ namespace Astra
         template<typename T>
         bool RemoveComponent(Entity entity) noexcept
         {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorComponent);
             static_assert(Component<T>, "T must satisfy Component concept");
             
             auto* pool = GetPool<T>();

@@ -7,6 +7,7 @@
 
 #include "../Container/FlatMap.hpp"
 #include "../Core/Base.hpp"
+#include "../Core/Profile.hpp"
 #include "../Core/Simd.hpp"
 #include "../Core/TypeID.hpp"
 #include "../Entity/Entity.hpp"
@@ -75,6 +76,7 @@ namespace Astra
         template<typename... Args>
         T* Add(Entity entity, Args&&... args)
         {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorComponent);
             auto [it, inserted] = m_components.Emplace(entity, std::forward<Args>(args)...);
             if (inserted)
             {
@@ -132,6 +134,7 @@ namespace Astra
 
         bool Remove(Entity entity) noexcept override
         {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorComponent);
             m_cacheDirty = true;
             return m_components.Erase(entity) > 0;
         }
@@ -201,6 +204,7 @@ namespace Astra
         template<typename Func>
         void ForEachGroup(Func&& func)
         {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorQuery);
             m_components.ForEachGroup([&func](auto& group_view)
             {
                 while (group_view.HasNext())
@@ -215,6 +219,7 @@ namespace Astra
         template<typename Func>
         void ProcessInBatches(Func&& func, std::size_t batchSize = 16)
         {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorQuery);
             std::vector<Entity> entityBatch;
             std::vector<T*> componentBatch;
             entityBatch.reserve(batchSize);
@@ -249,12 +254,18 @@ namespace Astra
         }
         
         // Batch operations leveraging FlatMap's batch lookup
-        template<size_t N>
-        void PrefetchBatch(const Entity (&entities)[N]) const noexcept
+        void PrefetchBatch(const Entity* entities, std::size_t count) const noexcept
         {
-            typename FlatMap<Entity, T>::const_iterator results[N];
-            m_components.FindBatch(entities, results);
-            // Results are already prefetched by FindBatch
+            // Prefetch up to 16 entities at a time
+            constexpr size_t BATCH_SIZE = 16;
+            for (size_t i = 0; i < count; i += BATCH_SIZE)
+            {
+                size_t batchCount = std::min(BATCH_SIZE, count - i);
+                for (size_t j = 0; j < batchCount; ++j)
+                {
+                    PrefetchComponent(entities[i + j]);
+                }
+            }
         }
         
         // Get components for a batch of entities
@@ -275,10 +286,50 @@ namespace Astra
             return found;
         }
         
+        // Const version of GetBatch
+        template<size_t N>
+        std::size_t GetBatch(const Entity (&entities)[N], const T* (&components)[N]) const noexcept
+        {
+            typename FlatMap<Entity, T>::const_iterator results[N];
+            m_components.FindBatch(entities, results);
+            
+            std::size_t found = 0;
+            for (std::size_t i = 0; i < N; ++i)
+            {
+                if (results[i] != m_components.end())
+                {
+                    components[found++] = &results[i]->second;
+                }
+            }
+            return found;
+        }
+        
+        // Prefetch component data for an entity
+        void PrefetchComponent(Entity entity) const noexcept
+        {
+            // Prefetch the component data if it exists
+            auto* component = m_components.TryGet(entity);
+            if (component)
+            {
+                Simd::Ops::PrefetchT1(component);
+            }
+        }
+        
         // Get group statistics for performance analysis
         [[nodiscard]] auto GetGroupStats() const noexcept
         {
             return m_components.GetGroupStats();
+        }
+        
+        // Access to FlatMap for advanced operations
+        [[nodiscard]] const FlatMap<Entity, T>& GetFlatMap() const noexcept
+        {
+            return m_components;
+        }
+        
+        [[nodiscard]] FlatMap<Entity, T>& GetFlatMap() noexcept
+        {
+            return m_components;
         }
         
     private:
@@ -294,6 +345,7 @@ namespace Astra
                 {
                     m_entityCache.push_back(entity);
                 }
+                
                 
                 m_cacheDirty = false;
             }

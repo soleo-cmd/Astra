@@ -8,6 +8,7 @@
 #include "Entity.hpp"
 #include "../Core/Base.hpp"
 #include "../Core/Error.hpp"
+#include "../Core/Profile.hpp"
 
 namespace Astra
 {
@@ -76,6 +77,7 @@ namespace Astra
          */
         [[nodiscard]] Entity Create() noexcept
         {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorEntity);
             EntityID id;
             VersionType version;
             
@@ -143,6 +145,7 @@ namespace Astra
          */
         bool Destroy(Entity entity) noexcept
         {
+            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorEntity);
             if (!IsValid(entity))
             {
                 return false;
