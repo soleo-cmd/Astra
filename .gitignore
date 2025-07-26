@@ -44,14 +44,6 @@
 
 bin-int/
 
-tests/
-
-include/Astra/Container/DenseMap.hpp
-
-include/Astra/Container/PackedArray.hpp
-
-include/Astra/Container/SparseSet.hpp
-
 *.sln
 
 *.vcxproj

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <string_view>
 #include <type_traits>
@@ -47,6 +48,9 @@ namespace Astra
 
         // Debug/Tools support
         virtual void ShrinkToFit() = 0;
+
+        // Generation tracking for stream invalidation
+        [[nodiscard]] virtual std::uint64_t GetGeneration() const noexcept = 0;
     };
 
     template<typename T>
@@ -81,6 +85,7 @@ namespace Astra
             if (inserted)
             {
                 m_cacheDirty = true;
+                m_generation.fetch_add(1, std::memory_order_relaxed);
                 return &it->second;
             }
             return nullptr;
@@ -94,6 +99,7 @@ namespace Astra
         T* Set(Entity entity, Args&&... args)
         {
             m_cacheDirty = true;
+            m_generation.fetch_add(1, std::memory_order_relaxed);
             return &(m_components[entity] = T(std::forward<Args>(args)...));
         }
 
@@ -135,8 +141,13 @@ namespace Astra
         bool Remove(Entity entity) noexcept override
         {
             ASTRA_PROFILE_ZONE_COLOR(Profile::ColorComponent);
-            m_cacheDirty = true;
-            return m_components.Erase(entity) > 0;
+            if (m_components.Erase(entity) > 0)
+            {
+                m_cacheDirty = true;
+                m_generation.fetch_add(1, std::memory_order_relaxed);
+                return true;
+            }
+            return false;
         }
 
         [[nodiscard]] std::size_t Size() const noexcept override
@@ -154,6 +165,7 @@ namespace Astra
             m_components.Clear();
             m_entityCache.clear();
             m_cacheDirty = true;
+            m_generation.fetch_add(1, std::memory_order_relaxed);
         }
 
         void Reserve(std::size_t capacity) override
@@ -194,6 +206,11 @@ namespace Astra
             m_entityCache.shrink_to_fit();
         }
 
+        [[nodiscard]] std::uint64_t GetGeneration() const noexcept override
+        {
+            return m_generation.load(std::memory_order_relaxed);
+        }
+
         // Direct iteration over components
         [[nodiscard]] auto begin() noexcept { return m_components.begin(); }
         [[nodiscard]] auto begin() const noexcept { return m_components.begin(); }
@@ -206,53 +223,14 @@ namespace Astra
         {
             ASTRA_PROFILE_ZONE_COLOR(Profile::ColorQuery);
             m_components.ForEachGroup([&func](auto& group_view)
-            {
-                while (group_view.HasNext())
                 {
-                    auto& pair = group_view.NextValue();
-                    func(pair.first, pair.second);
-                }
-            });
-        }
-        
-        // SIMD-friendly batch processing
-        template<typename Func>
-        void ProcessInBatches(Func&& func, std::size_t batchSize = 16)
-        {
-            ASTRA_PROFILE_ZONE_COLOR(Profile::ColorQuery);
-            std::vector<Entity> entityBatch;
-            std::vector<T*> componentBatch;
-            entityBatch.reserve(batchSize);
-            componentBatch.reserve(batchSize);
-            
-            m_components.ForEachGroup([&](auto& group_view)
-            {
-                // Collect pointers from this group
-                typename FlatMap<Entity, T>::ValueType* ptrs[16];
-                std::size_t count = group_view.GetValuePointers(ptrs, 16);
-                
-                // Fill batch vectors
-                for (std::size_t i = 0; i < count; ++i)
-                {
-                    entityBatch.push_back(ptrs[i]->first);
-                    componentBatch.push_back(&ptrs[i]->second);
-                    
-                    if (entityBatch.size() == batchSize)
+                    while (group_view.HasNext())
                     {
-                        func(entityBatch.data(), componentBatch.data(), batchSize);
-                        entityBatch.clear();
-                        componentBatch.clear();
+                        auto& pair = group_view.NextValue();
+                        func(pair.first, pair.second);
                     }
-                }
-            });
-            
-            // Process remaining items
-            if (!entityBatch.empty())
-            {
-                func(entityBatch.data(), componentBatch.data(), entityBatch.size());
-            }
+                });
         }
-        
         // Batch operations leveraging FlatMap's batch lookup
         void PrefetchBatch(const Entity* entities, std::size_t count) const noexcept
         {
@@ -267,14 +245,14 @@ namespace Astra
                 }
             }
         }
-        
+
         // Get components for a batch of entities
         template<size_t N>
         std::size_t GetBatch(const Entity (&entities)[N], T* (&components)[N]) noexcept
         {
             typename FlatMap<Entity, T>::iterator results[N];
             m_components.FindBatch(entities, results);
-            
+
             std::size_t found = 0;
             for (std::size_t i = 0; i < N; ++i)
             {
@@ -285,14 +263,14 @@ namespace Astra
             }
             return found;
         }
-        
+
         // Const version of GetBatch
         template<size_t N>
         std::size_t GetBatch(const Entity (&entities)[N], const T* (&components)[N]) const noexcept
         {
             typename FlatMap<Entity, T>::const_iterator results[N];
             m_components.FindBatch(entities, results);
-            
+
             std::size_t found = 0;
             for (std::size_t i = 0; i < N; ++i)
             {
@@ -303,7 +281,7 @@ namespace Astra
             }
             return found;
         }
-        
+
         // Prefetch component data for an entity
         void PrefetchComponent(Entity entity) const noexcept
         {
@@ -314,24 +292,24 @@ namespace Astra
                 Simd::Ops::PrefetchT1(component);
             }
         }
-        
+
         // Get group statistics for performance analysis
         [[nodiscard]] auto GetGroupStats() const noexcept
         {
             return m_components.GetGroupStats();
         }
-        
+
         // Access to FlatMap for advanced operations
         [[nodiscard]] const FlatMap<Entity, T>& GetFlatMap() const noexcept
         {
             return m_components;
         }
-        
+
         [[nodiscard]] FlatMap<Entity, T>& GetFlatMap() noexcept
         {
             return m_components;
         }
-        
+
     private:
         // Private member functions
         void UpdateEntityCache() const
@@ -340,21 +318,22 @@ namespace Astra
             {
                 m_entityCache.clear();
                 m_entityCache.reserve(m_components.Size());
-                
+
                 for (const auto& [entity, component] : m_components)
                 {
                     m_entityCache.push_back(entity);
                 }
-                
-                
+
+
                 m_cacheDirty = false;
             }
         }
-        
+
         // Member variables (declared last in private section)
         FlatMap<Entity, T> m_components;
         mutable std::vector<Entity> m_entityCache;
         mutable bool m_cacheDirty = true;
         ComponentID m_componentId;
+        mutable std::atomic<std::uint64_t> m_generation{0};
     };
 }

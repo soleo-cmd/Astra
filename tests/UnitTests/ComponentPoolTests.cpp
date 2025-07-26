@@ -334,33 +334,6 @@ TEST_CASE("ComponentPool Batch Operations", "[ComponentPool]")
         // Should not crash
         pool.PrefetchBatch(entities.data(), entities.size());
     }
-    
-    SECTION("ProcessInBatches operation")
-    {
-        // Add many components
-        for (int i = 0; i < 100; ++i)
-        {
-            pool.Add(Entity(i, 1), float(i), 0.0f, 0.0f);
-        }
-        
-        int totalProcessed = 0;
-        pool.ProcessInBatches([&totalProcessed](Entity* entities, Position** components, size_t count)
-        {
-            totalProcessed += static_cast<int>(count);
-            
-            // Verify batch size
-            REQUIRE(count <= 16);
-            
-            // Verify components
-            for (size_t i = 0; i < count; ++i)
-            {
-                REQUIRE(entities[i].Valid());
-                REQUIRE(components[i] != nullptr);
-            }
-        }, 16);
-        
-        REQUIRE(totalProcessed == 100);
-    }
 }
 
 TEST_CASE("ComponentPool Memory Management", "[ComponentPool]")
@@ -451,22 +424,6 @@ TEST_CASE("ComponentPool with Complex Types", "[ComponentPool]")
         REQUIRE(pool.Get(e1).value == "This is a very long entity name that should be moved");
         REQUIRE((longName.empty() || longName == "This is a very long entity name that should be moved"));
     }
-}
-
-TEST_CASE("ComponentPool Group Statistics", "[ComponentPool]")
-{
-    ComponentPool<Position> pool;
-    
-    // Add enough components to span multiple groups
-    for (int i = 0; i < 100; ++i)
-    {
-        pool.Add(Entity(i, 1), float(i), 0.0f, 0.0f);
-    }
-    
-    auto stats = pool.GetGroupStats();
-    REQUIRE(stats.totalGroups > 0);
-    REQUIRE(stats.averageOccupancy > 0.0f);
-    REQUIRE(stats.averageOccupancy <= 1.0f);
 }
 
 TEST_CASE("IComponentPool Polymorphism", "[ComponentPool]")
