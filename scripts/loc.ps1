@@ -27,7 +27,7 @@ param(
 )
 
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Path = Join-Path (Join-Path $ScriptRoot "..") "src"
+$Path = Join-Path (Join-Path $ScriptRoot "..") "include"
 
 # Function to check if a path should be excluded
 function Test-ExcludePath {
