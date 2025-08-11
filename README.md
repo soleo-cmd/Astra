@@ -10,30 +10,6 @@ A high-performance, archetype-based Entity Component System (ECS) library for mo
 - **Advanced queries** - Compile-time optimized queries with Optional, Not, Any, OneOf modifiers
 - **Memory optimized** - Custom chunk allocator with huge page support (2MB pages)
 - **Modern C++20** - Concepts, ranges, fold expressions, if constexpr
-- **Zero-cost abstractions** - High-level APIs compile to optimal assembly
-
-## Performance Benchmarks
-
-Benchmark results on Intel Core i7 @ 3.61 GHz (20 cores, 25MB L3 cache):
-
-| Operation | 10K Entities | 100K Entities | 1M Entities |
-|-----------|--------------|---------------|-------------|
-| **Entity Creation** | 253ns/entity | 219ns/entity | 270ns/entity |
-| **Batch Creation** | 115ns/entity | 122ns/entity | 193ns/entity |
-| **Component Add** | 263ns/entity | 276ns/entity | 416ns/entity |
-| **Component Remove** | 190ns/entity | 218ns/entity | 314ns/entity |
-| **Single Component Iteration** | **1.05ns/entity** | **1.12ns/entity** | **1.29ns/entity** |
-| **Two Components** | 2.15ns/entity | 2.27ns/entity | 3.20ns/entity |
-| **Three Components** | 2.83ns/entity | 2.97ns/entity | 4.00ns/entity |
-| **Five Components** | 4.58ns/entity | 4.76ns/entity | 5.70ns/entity |
-| **Random Access** | 21.6ns/access | 25.8ns/access | 79.2ns/access |
-| **Hierarchy Traversal** | 161ns/entity | 16ns/entity | 112ns/entity |
-
-Key performance highlights:
-- **Sub-nanosecond iteration** for single component queries at scale
-- **975M entities/second** throughput for single component iteration
-- **8.7M entities/second** batch creation rate
-- **Cache-efficient** archetype storage maintains performance at scale
 
 ## Quick Start
 
@@ -89,17 +65,7 @@ int main() {
 scripts/generate_vs2022.bat
 
 # Open generated solution
-build/Astra.sln
-```
-
-#### Linux/macOS
-```bash
-# Generate makefiles
-scripts/generate_linux.sh  # or generate_macos.sh
-
-# Build
-cd build
-make config=release -j8
+Astra.sln
 ```
 
 ### Build Configurations
@@ -159,7 +125,7 @@ Separate from component storage to prevent archetype fragmentation:
 // Hierarchies
 registry.SetParent(child, parent);
 auto relations = registry.GetRelations(parent);
-for (Entity child : relations.GetChildren()) {
+for (Astra::Entity child : relations.GetChildren()) {
     // Process children
 }
 
@@ -181,19 +147,22 @@ Components are simple data structures that hold entity data:
 
 ```cpp
 // Components must be trivially copyable
-struct Transform {
+struct Transform
+{
     float x, y, z;
     float rotation;
     float scale;
 };
 
-struct Health {
+struct Health
+{
     int current;
     int max;
 };
 
 // Register component (optional, for runtime type info)
-registry.RegisterComponent<Transform>("Transform");
+auto componentRegistry = registry.GetComponentRegistry();
+componentRegistry->RegisterComponent<Transform>();
 ```
 
 ### Entities
@@ -208,11 +177,12 @@ auto player = registry.CreateEntity<Transform, Health>(
 );
 
 // Add/remove components
-registry.AddComponent(player, Velocity{0, 0, 0});
+registry.AddComponent<Velocity>(player, Velocity{0, 0, 0});
 registry.RemoveComponent<Velocity>(player);
 
 // Access components
-if (auto* health = registry.GetComponent<Health>(player)) {
+if (auto* health = registry.GetComponent<Health>(player))
+{
     health->current -= 10;
 }
 
@@ -229,18 +199,19 @@ Views provide efficient iteration over entities with specific components:
 auto view = registry.CreateView<Position, Velocity>();
 
 // With query modifiers
-auto enemies = registry.CreateView<Position, Enemy, Not<Dead>>();
-auto targets = registry.CreateView<Position, Any<Player, Enemy>>();
-auto renderables = registry.CreateView<Transform, Optional<Sprite>>();
+auto enemies = registry.CreateView<Position, Enemy, Astra::Not<Dead>>();
+auto targets = registry.CreateView<Position, Astra::Any<Player, Enemy>>();
+auto renderables = registry.CreateView<Transform, Astra::Optional<Sprite>>();
 
 // Iteration methods
-view.ForEach([](Entity e, Position& pos, Velocity& vel) {
+view.ForEach([](Astra::Entity e, Position& pos, Velocity& vel) {
     // ForEach - Fastest (~1.05ns/entity)
     pos.x += vel.dx;
 });
 
 // Or use range-based for loop
-for (auto [entity, pos, vel] : view) {
+for (auto [entity, pos, vel] : view)
+{
     // Range-based - Clean syntax (~3-4ns/entity)
     pos->x += vel->dx;
 }
@@ -265,19 +236,20 @@ registry.SetParent(child, parent);
 
 // Query relationships
 auto relations = registry.GetRelations(parent);
-for (Entity child : relations.GetChildren()) {
+for (Astra::Entity child : relations.GetChildren()) {
     // Process children
 }
 
 // Filtered relationships
 auto physicsChildren = registry.GetRelations<RigidBody>(parent);
-physicsChildren.ForEachChild([](Entity e, RigidBody& rb) {
+physicsChildren.ForEachChild([](Entity e, RigidBody& rb)
+{
     // Only children with RigidBody component
 });
 
 // Entity links (many-to-many)
 registry.AddLink(entity1, entity2);
-for (Entity linked : relations.GetLinks()) {
+for (Astra::Entity linked : relations.GetLinks()) {
     // Process linked entities
 }
 ```
@@ -288,7 +260,7 @@ Optimize entity creation and destruction:
 
 ```cpp
 // Batch create entities
-std::vector<Entity> enemies(1000);
+std::vector<Astra::Entity> enemies(1000);
 registry.CreateEntities<Position, Velocity>(1000, enemies,
     [](size_t i) {
         return std::make_tuple(
@@ -308,10 +280,10 @@ registry.DestroyEntities(enemies);
 Enable thread-safe operations:
 
 ```cpp
-Registry::Config config;
+Astra::Registry::Config config;
 config.threadSafe = true;
 config.initialArchetypeCapacity = 256;
-Registry registry(config);
+Astra::Registry registry(config);
 ```
 
 ### Memory Configuration
@@ -319,28 +291,11 @@ Registry registry(config);
 Configure memory allocation:
 
 ```cpp
-Registry::Config config;
+Astra::Registry::Config config;
 config.useHugePages = true;  // Use 2MB pages if available
 config.chunkSize = 16384;    // 16KB chunks (default)
 config.initialChunkCount = 100;
-```
-
-### Custom Allocators
-
-Provide custom memory allocation:
-
-```cpp
-struct CustomAllocator {
-    void* allocate(size_t size, size_t alignment) {
-        // Custom allocation logic
-    }
-    void deallocate(void* ptr, size_t size) {
-        // Custom deallocation logic
-    }
-};
-
-Registry::Config config;
-config.allocator = std::make_shared<CustomAllocator>();
+Astra::Registry registry(config);
 ```
 
 ### SIMD Configuration
@@ -350,23 +305,15 @@ Astra automatically detects and uses available SIMD instructions:
 - **x86/x64**: SSE2 (required), SSE4.2, AVX2
 - **ARM**: NEON
 
-Force specific SIMD level:
-
-```cpp
-// In build configuration or before including Astra
-#define ASTRA_FORCE_SSE2  // Use only SSE2
-#define ASTRA_FORCE_AVX2  // Require AVX2
-```
-
 ## Examples
 
 ### Movement System
 
 ```cpp
-void UpdateMovement(Registry& registry, float deltaTime) {
-    auto view = registry.CreateView<Position, Velocity, Not<Frozen>>();
+void UpdateMovement(Astra::Registry& registry, float deltaTime) {
+    auto view = registry.CreateView<Position, Velocity, Astra::Not<Frozen>>();
     
-    view.ForEach([deltaTime](Entity e, Position& pos, Velocity& vel) {
+    view.ForEach([deltaTime](Astra::Entity e, Position& pos, Velocity& vel) {
         pos.x += vel.dx * deltaTime;
         pos.y += vel.dy * deltaTime;
         pos.z += vel.dz * deltaTime;
@@ -374,112 +321,25 @@ void UpdateMovement(Registry& registry, float deltaTime) {
 }
 ```
 
-### Collision Detection
-
-```cpp
-void CheckCollisions(Registry& registry) {
-    auto view = registry.CreateView<Position, Collider>();
-    
-    // Spatial partitioning would optimize this
-    view.ForEach([&](Entity e1, Position& pos1, Collider& col1) {
-        view.ForEach([&](Entity e2, Position& pos2, Collider& col2) {
-            if (e1 >= e2) return;  // Skip self and duplicates
-            
-            float dist = distance(pos1, pos2);
-            if (dist < col1.radius + col2.radius) {
-                // Handle collision
-            }
-        });
-    });
-}
-```
-
 ### Hierarchy Transform
 
 ```cpp
-void UpdateWorldTransforms(Registry& registry, Entity root) {
+void UpdateWorldTransforms(Astra::Registry& registry, Astra::Entity root) {
     auto relations = registry.GetRelations<Transform>(root);
     
-    relations.ForEachDescendant([](Entity e, size_t depth, Transform& local) {
-        // Update world transform based on parent
-        // Depth indicates hierarchy level
-    }, TraversalOrder::DepthFirst);
+    relations.ForEachDescendant(
+        [](Astra::Entity e, size_t depth, Transform& local) {
+            // Update world transform based on parent
+            // Depth indicates hierarchy level
+        },
+        Astra::TraversalOrder::DepthFirst
+    );
 }
 ```
 
-## Implementation Details
-
-### Type System
-- **TypeID**: Compile-time type identification using template specialization
-- **Component Concept**: C++20 concepts enforce component requirements
-- **Query Validation**: Compile-time validation of query arguments
-
-### Container Library
-- **FlatMap**: SwissTable-inspired hash map with SIMD metadata scanning
-- **SmallVector**: Small buffer optimization (16 bytes stack storage)
-- **Bitmap**: SIMD-accelerated bitmap for component masks (up to 256 components)
-- **ChunkPool**: Lock-free chunk allocator with huge page support
-
-### Performance Optimizations
-- **Archetype Sorting**: Views sort archetypes by entity count for better cache usage
-- **Branch Prediction**: Strategic use of `ASTRA_LIKELY`/`ASTRA_UNLIKELY` hints
-- **Cache Line Alignment**: 64-byte alignment for hot data structures
-- **Manual Inlining**: `ASTRA_FORCEINLINE` on critical paths
-
-### SIMD Utilization
-- **Component Masks**: SIMD-accelerated bitmap operations for archetype matching
-- **Hash Operations**: Hardware CRC32 instructions when available (SSE4.2)
-- **Metadata Scanning**: SSE2/AVX2 acceleration in FlatMap lookups
-- **Cross-Platform**: Automatic detection of SSE2/SSE4.2/AVX2 on x86, NEON on ARM
-
 ## Benchmarking
 
-Run the included benchmarks:
-
-```bash
-# Windows
-./bin/Dist-windows-x86_64/AstraBenchmark/AstraBenchmark.exe
-
-# Linux/macOS  
-./bin/Release-linux-x64/AstraBenchmark/AstraBenchmark
-```
-
-## API Reference
-
-### Registry Methods
-
-| Method | Description | Performance |
-|--------|-------------|-------------|
-| `CreateEntity<Ts...>(args...)` | Create entity with components | ~250ns |
-| `CreateEntities<Ts...>(count, out, init)` | Batch create entities | ~115ns/entity |
-| `DestroyEntity(entity)` | Destroy entity | ~200ns |
-| `AddComponent<T>(entity, args...)` | Add component | ~260ns |
-| `RemoveComponent<T>(entity)` | Remove component | ~190ns |
-| `GetComponent<T>(entity)` | Get component pointer | ~22ns |
-| `HasComponent<T>(entity)` | Check component | ~15ns |
-| `CreateView<QueryArgs...>()` | Create query view | O(archetypes) |
-| `SetParent(child, parent)` | Set hierarchy | O(1) |
-| `GetRelations<Filters...>(entity)` | Get relationships | O(1) |
-
-### View Methods
-
-| Method | Description | Performance |
-|--------|-------------|-------------|
-| `ForEach(func)` | Execute for each entity | 1.05ns/entity |
-| `Size()` | Count entities | O(archetypes) |
-| `Empty()` | Check if empty | O(1) |
-| `begin()/end()` | STL iterators | 3-4ns/entity |
-
-### Relations Methods
-
-| Method | Description | Performance |
-|--------|-------------|-------------|
-| `GetParent()` | Get parent entity | O(1) |
-| `GetChildren()` | Get child entities | O(1) |
-| `GetLinks()` | Get linked entities | O(1) |
-| `GetDescendants()` | Iterate hierarchy | O(descendants) |
-| `ForEachChild(func)` | Execute for children | O(children) |
-| `ForEachDescendant(func)` | Execute for descendants | ~16-160ns/entity |
+Run the included benchmarks!
 
 ## Contributing
 
@@ -500,5 +360,3 @@ Inspired by:
 - [EnTT](https://github.com/skypjack/entt) - Modern C++ ECS
 - [Flecs](https://github.com/SanderMertens/flecs) - Fast and lightweight ECS
 - [DOTS](https://unity.com/dots) - Unity's Data-Oriented Technology Stack
-
-Special thanks to the C++ and game development communities for their valuable feedback and contributions.
