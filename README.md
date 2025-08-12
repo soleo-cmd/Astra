@@ -203,16 +203,14 @@ auto enemies = registry.CreateView<Position, Enemy, Astra::Not<Dead>>();
 auto targets = registry.CreateView<Position, Astra::Any<Player, Enemy>>();
 auto renderables = registry.CreateView<Transform, Astra::Optional<Sprite>>();
 
-// Iteration methods
+// Iteration methods (Optimized)
 view.ForEach([](Astra::Entity e, Position& pos, Velocity& vel) {
-    // ForEach - Fastest (~1.05ns/entity)
     pos.x += vel.dx;
 });
 
-// Or use range-based for loop
+// Or use range-based for loop (Slower)
 for (auto [entity, pos, vel] : view)
 {
-    // Range-based - Clean syntax (~3-4ns/entity)
     pos->x += vel->dx;
 }
 ```
