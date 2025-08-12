@@ -96,49 +96,6 @@ This design ensures:
 - **Memory efficiency** - Minimal fragmentation with chunk allocation
 - **Fast iteration** - Linear memory access pattern
 
-### Query System
-
-Astra's query system uses compile-time validation and optimization:
-
-```cpp
-// Basic queries
-auto movables = registry.CreateView<Position, Velocity>();
-
-// Advanced query modifiers
-auto enemies = registry.CreateView<Position, Enemy, Not<Dead>>();
-auto renderables = registry.CreateView<Transform, Optional<Sprite>>();
-auto targets = registry.CreateView<Position, Any<Player, Enemy, NPC>>();
-auto weapons = registry.CreateView<Item, OneOf<Sword, Bow, Staff>>();
-```
-
-Query modifiers:
-- `Optional<T>` - Component may or may not exist (nullptr if absent)
-- `Not<T>` - Exclude entities with component T
-- `Any<T...>` - At least one of the specified components
-- `OneOf<T...>` - Exactly one of the specified components
-
-### Relationship System
-
-Separate from component storage to prevent archetype fragmentation:
-
-```cpp
-// Hierarchies
-registry.SetParent(child, parent);
-auto relations = registry.GetRelations(parent);
-for (Astra::Entity child : relations.GetChildren()) {
-    // Process children
-}
-
-// Filtered relationships
-auto physicsChildren = registry.GetRelations<RigidBody>(parent);
-physicsChildren.ForEachDescendant([](Entity e, size_t depth, RigidBody& rb) {
-    // Only descendants with RigidBody
-});
-
-// Bidirectional links
-registry.AddLink(entity1, entity2);
-```
-
 ## Core Concepts
 
 ### Components
