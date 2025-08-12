@@ -1,19 +1,19 @@
+#include <Astra/Astra.hpp>
 #include <benchmark/benchmark.h>
-#include <vector>
 #include <cstdint>
 #include <queue>
-#include <Astra/Astra.hpp>
+#include <vector>
 
-// Components matching EnTT's benchmark
-struct Position {
+struct Position
+{
     std::uint64_t x;
     std::uint64_t y;
 };
 
 struct Velocity : Position {};
 
-struct StablePosition : Position {
-    // In Astra, we don't have in_place_delete concept
+struct StablePosition : Position
+{
 };
 
 template<int N>
@@ -22,13 +22,15 @@ struct Comp {
 };
 
 
-// Entity creation benchmarks
-static void BM_CreateEntities(benchmark::State& state) {
+static void BM_CreateEntities(benchmark::State& state)
+{
     const size_t count = state.range(0);
     
-    for(auto _ : state) {
+    for(auto _ : state)
+    {
         Astra::Registry registry;
-        for(size_t i = 0; i < count; i++) {
+        for(size_t i = 0; i < count; ++i)
+        {
             benchmark::DoNotOptimize(registry.CreateEntity());
         }
     }
@@ -36,13 +38,16 @@ static void BM_CreateEntities(benchmark::State& state) {
     state.SetItemsProcessed(state.iterations() * count);
 }
 
-static void BM_CreateEntitiesBatch(benchmark::State& state) {
+static void BM_CreateEntitiesBatch(benchmark::State& state)
+{
     const size_t count = state.range(0);
     std::vector<Astra::Entity> entities(count);
     
-    for(auto _ : state) {
+    for(auto _ : state)
+    {
         Astra::Registry registry;
-        registry.CreateEntities(count, entities, [](size_t) { 
+        registry.CreateEntities(count, entities, [](size_t)
+        { 
             return std::tuple<>(); 
         });
     }
@@ -51,14 +56,17 @@ static void BM_CreateEntitiesBatch(benchmark::State& state) {
 }
 
 // Component manipulation benchmarks
-static void BM_AddComponents(benchmark::State& state) {
+static void BM_AddComponents(benchmark::State& state)
+{
     const size_t count = state.range(0);
     
-    for(auto _ : state) {
+    for(auto _ : state)
+    {
         state.PauseTiming();
         Astra::Registry registry;
         std::vector<Astra::Entity> entities;
-        for(size_t i = 0; i < count; i++) {
+        for(size_t i = 0; i < count; ++i)
+        {
             entities.push_back(registry.CreateEntity());
         }
         state.ResumeTiming();

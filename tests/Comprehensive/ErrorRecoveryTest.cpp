@@ -252,11 +252,11 @@ TEST_F(ErrorRecoveryTest, BatchDestructionWithInvalidEntities)
     }
     
     std::vector<Entity> mixedEntities;
-    mixedEntities.push_back(Entity());  // Invalid
+    mixedEntities.push_back(Entity::Invalid());  // Invalid
     mixedEntities.insert(mixedEntities.end(), validEntities.begin(), validEntities.begin() + 10);
-    mixedEntities.push_back(Entity());  // Invalid
+    mixedEntities.push_back(Entity::Invalid());  // Invalid
     mixedEntities.insert(mixedEntities.end(), validEntities.begin() + 10, validEntities.begin() + 20);
-    mixedEntities.push_back(Entity{});
+    mixedEntities.push_back(Entity::Invalid());
     
     size_t initialSize = registry->Size();
     

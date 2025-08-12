@@ -19,7 +19,7 @@ TEST_F(EntityTest, DefaultConstruction)
     
     EXPECT_FALSE(entity.IsValid());
     EXPECT_FALSE(static_cast<bool>(entity));
-    EXPECT_EQ(entity.GetValue(), Astra::Entity::INVALID);
+    EXPECT_EQ(entity, Astra::Entity::Invalid());
 }
 
 // Test construction with ID and version
@@ -52,9 +52,10 @@ TEST_F(EntityTest, ConstructionWithRawValue)
 // Test invalid entity constant
 TEST_F(EntityTest, InvalidEntityConstant)
 {
-    Astra::Entity invalid(Astra::Entity::INVALID);
+    Astra::Entity invalid = Astra::Entity::Invalid();
     
     EXPECT_FALSE(invalid.IsValid());
+    EXPECT_TRUE(invalid.IsInvalid());
     EXPECT_EQ(invalid.GetValue(), std::numeric_limits<Astra::Entity::Type>::max());
 }
 
@@ -117,7 +118,7 @@ TEST_F(EntityTest, VersionOverflow)
     
     // Should return invalid entity on overflow
     EXPECT_FALSE(next.IsValid());
-    EXPECT_EQ(next.GetValue(), Astra::Entity::INVALID);
+    EXPECT_EQ(next, Astra::Entity::Invalid());
 }
 
 // Test equality operators
@@ -341,7 +342,7 @@ TEST_F(EntityTest, EdgeCases)
     // Verify that max ID + max version is indeed INVALID
     Astra::Entity shouldBeInvalid(Astra::Entity::ID_MASK, Astra::Entity::VERSION_MASK);
     EXPECT_FALSE(shouldBeInvalid.IsValid());
-    EXPECT_EQ(shouldBeInvalid.GetValue(), Astra::Entity::INVALID);
+    EXPECT_EQ(shouldBeInvalid, Astra::Entity::Invalid());
 }
 
 // Test constexpr operations

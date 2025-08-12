@@ -38,7 +38,7 @@ TEST_F(EntityPoolTest, ConstructionWithCapacity)
 // Test construction with custom memory config
 TEST_F(EntityPoolTest, ConstructionWithMemoryConfig)
 {
-    Astra::EntityPool::MemoryConfig config;
+    Astra::EntityPool::Config config;
     config.entitiesPerSegment = 1024;  // Smaller segments for testing
     config.autoRelease = true;
     config.maxEmptySegments = 1;
@@ -353,7 +353,7 @@ TEST_F(EntityPoolTest, IteratorFunctionality)
 // Test segmented memory allocation
 TEST_F(EntityPoolTest, SegmentedMemoryAllocation)
 {
-    Astra::EntityPool::MemoryConfig config(1024);  // Small segments
+    Astra::EntityPool::Config config(1024);  // Small segments
     Astra::EntityPool pool(config);
     
     // Create entities across multiple segments
@@ -379,7 +379,7 @@ TEST_F(EntityPoolTest, SegmentedMemoryAllocation)
 // Test memory release functionality
 TEST_F(EntityPoolTest, MemoryRelease)
 {
-    Astra::EntityPool::MemoryConfig config(1024);
+    Astra::EntityPool::Config config(1024);
     config.autoRelease = true;
     config.maxEmptySegments = 0;  // Release immediately
     
@@ -490,7 +490,7 @@ TEST_F(EntityPoolTest, RecyclingPattern)
 // Test entity ID limits
 TEST_F(EntityPoolTest, EntityIDLimits)
 {
-    Astra::EntityPool::MemoryConfig config(1024);
+    Astra::EntityPool::Config config(1024);
     Astra::EntityPool pool(config);
     
     // Create many entities to test ID allocation
@@ -574,7 +574,7 @@ TEST_F(EntityPoolTest, CustomSegmentSize)
     
     for (size_t segSize : segmentSizes)
     {
-        Astra::EntityPool::MemoryConfig config(static_cast<Astra::EntityPool::IDType>(segSize));
+        Astra::EntityPool::Config config(static_cast<Astra::EntityPool::IDType>(segSize));
         
         // Verify it was rounded to power of 2 and enforced minimum of 1024
         size_t expected = std::max(size_t(1024), std::bit_floor(segSize));

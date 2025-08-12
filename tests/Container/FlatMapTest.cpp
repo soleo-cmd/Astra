@@ -414,7 +414,7 @@ TEST_F(FlatMapTest, EntityKeyType)
     EXPECT_EQ(map[e3], "entity3");
     
     // Test with invalid entity
-    Astra::Entity invalid(Astra::Entity::INVALID);
+    Astra::Entity invalid(Astra::Entity::Invalid());
     map[invalid] = "invalid";
     EXPECT_EQ(map[invalid], "invalid");
     

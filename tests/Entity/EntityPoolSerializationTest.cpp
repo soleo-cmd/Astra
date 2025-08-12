@@ -228,7 +228,7 @@ TEST_F(EntityPoolSerializationTest, BatchCreation)
 TEST_F(EntityPoolSerializationTest, MultipleSegments)
 {
     // Create pool with small segments for testing
-    EntityPool::MemoryConfig config(1024);  // Small segments
+    EntityPool::Config config(1024);  // Small segments
     EntityPool pool(config);
     
     // Create enough entities to span multiple segments
@@ -268,7 +268,7 @@ TEST_F(EntityPoolSerializationTest, MultipleSegments)
 TEST_F(EntityPoolSerializationTest, PreserveConfiguration)
 {
     // Create pool with custom configuration
-    EntityPool::MemoryConfig config(8192);
+    EntityPool::Config config(8192);
     config.releaseThreshold = 0.2f;
     config.autoRelease = false;
     config.maxEmptySegments = 5;
