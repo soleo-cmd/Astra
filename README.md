@@ -228,19 +228,6 @@ registry.CreateEntities<Position, Velocity>(1000, enemies,
 registry.DestroyEntities(enemies);
 ```
 
-## Advanced Features
-
-### Thread Safety
-
-Enable thread-safe operations:
-
-```cpp
-Astra::Registry::Config config;
-config.threadSafe = true;
-config.initialArchetypeCapacity = 256;
-Astra::Registry registry(config);
-```
-
 ### Memory Configuration
 
 Configure memory allocation:
@@ -252,13 +239,6 @@ config.chunkSize = 16384;    // 16KB chunks (default)
 config.initialChunkCount = 100;
 Astra::Registry registry(config);
 ```
-
-### SIMD Configuration
-
-Astra automatically detects and uses available SIMD instructions:
-
-- **x86/x64**: SSE2 (required), SSE4.2, AVX2
-- **ARM**: NEON
 
 ## Examples
 
