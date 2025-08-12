@@ -10,10 +10,10 @@
 #include <utility>
 #include <vector>
 
+#include "../Container/SmallVector.hpp"
 #include "../Core/Base.hpp"
 #include "../Memory/Memory.hpp"
 #include "../Platform/Hardware.hpp"
-#include "../Container/SmallVector.hpp"
 
 namespace Astra
 {

@@ -318,7 +318,7 @@ namespace Astra
             }
             else
             {
-                return (parent.IsValid() && PassesFilter(parent)) ? parent : Entity{};
+                return (parent.IsValid() && PassesFilter(parent)) ? parent : Entity::Invalid();
             }
         }
         

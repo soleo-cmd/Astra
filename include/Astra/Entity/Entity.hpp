@@ -38,7 +38,6 @@ namespace Astra
             static constexpr auto ID_MASK       = Traits::ID_MASK;
             static constexpr auto VERSION_MASK  = Traits::VERSION_MASK;
             static constexpr auto VERSION_SHIFT = Traits::VERSION_SHIFT;
-            static constexpr auto INVALID       = Traits::INVALID;
 
             constexpr BasicEntity() noexcept : m_entity{Traits::INVALID} {}
             constexpr explicit BasicEntity(Type value) noexcept : m_entity{value} {}
@@ -59,7 +58,7 @@ namespace Astra
             ASTRA_NODISCARD constexpr explicit operator T() const noexcept
                 requires std::convertible_to<Type, T> && !std::same_as<T, bool>
             { 
-                return static_cast<T>(m_entity); 
+                return static_cast<T>(m_entity);
             }
 
             ASTRA_NODISCARD constexpr BasicEntity NextVersion() const noexcept
@@ -67,11 +66,9 @@ namespace Astra
                 const auto currentVersion = GetVersion();
                 const auto currentID = GetID();
 
-                // Check for version overflow
                 if (currentVersion >= VERSION_MASK)
                 {
-                    // Return invalid entity on overflow
-                    return BasicEntity(INVALID);
+                    return Invalid();
                 }
 
                 return BasicEntity(currentID, currentVersion + 1);
@@ -81,7 +78,10 @@ namespace Astra
             ASTRA_NODISCARD constexpr VersionType GetVersion() const noexcept { return static_cast<VersionType>(m_entity >> VERSION_SHIFT) & VERSION_MASK; }
             ASTRA_NODISCARD constexpr Type GetValue() const noexcept { return m_entity; }
 
-            ASTRA_NODISCARD constexpr bool IsValid() const noexcept { return m_entity != INVALID; }
+            ASTRA_NODISCARD constexpr bool IsValid() const noexcept { return m_entity != Traits::INVALID; }
+            ASTRA_NODISCARD constexpr bool IsInvalid() const noexcept { return m_entity == Traits::INVALID; }
+            
+            ASTRA_NODISCARD static constexpr BasicEntity Invalid() noexcept { return BasicEntity{Traits::INVALID}; }
 
         private:
             Type m_entity;
@@ -108,7 +108,7 @@ namespace Astra
     using EntityTraits32 = EntityTraits<32, 8>;   // 8-bit version, 24-bit ID
     using EntityTraits64 = EntityTraits<64, 32>;  // 32-bit version, 32-bit ID
 
-    using Entity = Detail::BasicEntity<EntityTraits64>;
+    using Entity = Detail::BasicEntity<EntityTraits32>;
 
     struct EntityHash
     {

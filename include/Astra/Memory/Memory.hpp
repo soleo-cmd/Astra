@@ -106,14 +106,6 @@ namespace Astra
         return available;
     }
     
-    /**
-     * Allocate memory with optional huge page support
-     * 
-     * @param size Size in bytes to allocate
-     * @param alignment Required alignment (must be power of 2)
-     * @param flags Allocation flags
-     * @return Allocation result with pointer and actual size
-     */
     ASTRA_FORCEINLINE AllocResult AllocateMemory(size_t size, size_t alignment = 64, AllocFlags flags = AllocFlags::None) noexcept
     {
         AllocResult result;
@@ -132,9 +124,7 @@ namespace Astra
                 size_t hugePagesSize = (size + HUGE_PAGE_SIZE - 1) & ~(HUGE_PAGE_SIZE - 1);
                 
                 // Try to allocate with large pages
-                void* ptr = VirtualAlloc(nullptr, hugePagesSize, 
-                    MEM_COMMIT | MEM_RESERVE | MEM_LARGE_PAGES,
-                    PAGE_READWRITE);
+                void* ptr = VirtualAlloc(nullptr, hugePagesSize, MEM_COMMIT | MEM_RESERVE | MEM_LARGE_PAGES, PAGE_READWRITE);
                     
                 if (ptr)
                 {

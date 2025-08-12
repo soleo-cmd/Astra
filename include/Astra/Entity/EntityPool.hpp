@@ -39,7 +39,7 @@ namespace Astra
         using VersionType = Entity::VersionType;
         using IDType = Entity::Type;
         
-        struct MemoryConfig
+        struct Config
         {
             IDType entitiesPerSegment = 65536;      // 64K entities = 64KB per segment (must be power of 2)
             IDType entitiesPerSegmentShift = 16;    // log2(65536) for fast division
@@ -49,28 +49,20 @@ namespace Astra
             size_t maxEmptySegments = 2;            // Keep some empty segments ready
             
             // Constructor to calculate shift and mask
-            MemoryConfig(IDType segmentSize = 65536) 
+            Config(IDType segmentSize = 65536) 
             {
-                // Round down to nearest power of 2 for safety
                 entitiesPerSegment = segmentSize > 0 ? std::bit_floor(segmentSize) : 1;
-                
-                // Ensure at least some reasonable minimum (e.g., 1024 entities)
                 entitiesPerSegment = std::max(IDType(1024), entitiesPerSegment);
-                
-                // Calculate shift using countr_zero (counts trailing zeros = log2 for powers of 2)
                 entitiesPerSegmentShift = static_cast<IDType>(std::countr_zero(entitiesPerSegment));
-                
-                // Calculate mask
                 entitiesPerSegmentMask = entitiesPerSegment - 1;
             }
         };
 
         static constexpr VersionType NULL_VERSION = 0;      // Marks uninitialized/destroyed slots
-        static constexpr VersionType INITIAL_VERSION = 1;    // First valid version
+        static constexpr VersionType INITIAL_VERSION = 1;   // First valid version
         static constexpr IDType INVALID_ID = Entity::ID_MASK;
 
     private:
-        // Free list entry: stores entity ID and its next version
         struct FreeListEntry
         {
             IDType id;
@@ -88,10 +80,9 @@ namespace Astra
             SmallVector<FreeListEntry, 16> freeList;   // Local free list
             size_t aliveCount = 0;
             
-            explicit Segment(IDType base, IDType cap) 
-                : baseId(base)
-                , capacity(cap)
-                , versions(std::make_unique<VersionType[]>(cap))
+            explicit Segment(IDType base, IDType cap) : baseId(base),
+                capacity(cap),
+                versions(std::make_unique<VersionType[]>(cap))
             {
                 std::fill_n(versions.get(), capacity, NULL_VERSION);
             }
@@ -119,7 +110,7 @@ namespace Astra
         SmallVector<FreeListEntry, 32> m_globalFreeList;  // Cross-segment free list
         
         // Configuration and state
-        MemoryConfig m_config;
+        Config m_config;
         IDType m_nextId = 0;
         std::size_t m_aliveCount = 0;
 
@@ -218,7 +209,7 @@ namespace Astra
         * Constructor with custom memory configuration
         * @param config Memory management configuration
         */
-        explicit EntityPool(const MemoryConfig& config)
+        explicit EntityPool(const Config& config)
             : m_config(config)
         {
         }

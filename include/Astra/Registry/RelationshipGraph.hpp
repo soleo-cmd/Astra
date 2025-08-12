@@ -82,12 +82,12 @@ namespace Astra
         /**
          * @brief Get the parent of an entity
          * @param child The child entity
-         * @return The parent entity, or Entity::Null() if no parent
+         * @return The parent entity, or Entity::Invalid() if no parent
          */
         Entity GetParent(Entity child) const
         {
             auto it = m_parents.Find(child);
-            return (it != m_parents.end()) ? it->second : Entity{};
+            return (it != m_parents.end()) ? it->second : Entity::Invalid();
         }
         
         /**

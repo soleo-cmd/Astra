@@ -34,27 +34,28 @@ namespace Astra
     public:
         struct Config
         {
-            ChunkPool::Config poolConfig;
+            EntityPool::Config entityPoolConfig;
+            ChunkPool::Config chunkPoolConfig;
         };
         
         explicit Registry(const Config& config = {}) :
-            m_entityPool(std::make_shared<EntityPool>()),
-            m_archetypeStorage(std::make_shared<ArchetypeStorage>(config.poolConfig))
+            m_entityPool(std::make_shared<EntityPool>(config.entityPoolConfig)),
+            m_archetypeStorage(std::make_shared<ArchetypeStorage>(config.chunkPoolConfig))
         {}
         
-        explicit Registry(const ChunkPool::Config& poolConfig) :
-            m_entityPool(std::make_shared<EntityPool>()),
-            m_archetypeStorage(std::make_shared<ArchetypeStorage>(poolConfig))
+        Registry(const EntityPool::Config& entityConfig, const ChunkPool::Config& chunkConfig) :
+            m_entityPool(std::make_shared<EntityPool>(entityConfig)),
+            m_archetypeStorage(std::make_shared<ArchetypeStorage>(chunkConfig))
         {}
         
         Registry(std::shared_ptr<ComponentRegistry> componentRegistry, const Config& config = {}) :
-            m_entityPool(std::make_shared<EntityPool>()),
-            m_archetypeStorage(std::make_shared<ArchetypeStorage>(componentRegistry, config.poolConfig))
+            m_entityPool(std::make_shared<EntityPool>(config.entityPoolConfig)),
+            m_archetypeStorage(std::make_shared<ArchetypeStorage>(componentRegistry, config.chunkPoolConfig))
         {}
         
         explicit Registry(const Registry& other, const Config& config = {}) :
-            m_entityPool(std::make_shared<EntityPool>()),
-            m_archetypeStorage(std::make_shared<ArchetypeStorage>(other.GetComponentRegistry(), config.poolConfig))
+            m_entityPool(std::make_shared<EntityPool>(config.entityPoolConfig)),
+            m_archetypeStorage(std::make_shared<ArchetypeStorage>(other.GetComponentRegistry(), config.chunkPoolConfig))
         {}
         
         Entity CreateEntity()
@@ -77,7 +78,7 @@ namespace Astra
             if (!packedLocation.IsValid())
             {
                 m_entityPool->Destroy(entity);
-                return Entity{};
+                return Entity::Invalid();
             }
             
             ((archetype->SetComponent<Components>(packedLocation, std::forward<Components>(components))), ...);
@@ -372,7 +373,7 @@ namespace Astra
                 // Emit parent changed signal (parent is now invalid)
                 if (parent.IsValid())
                 {
-                    m_signalManager.Emit<Events::ParentChanged>(child, Entity());
+                    m_signalManager.Emit<Events::ParentChanged>(child, Entity::Invalid());
                 }
             }
         }

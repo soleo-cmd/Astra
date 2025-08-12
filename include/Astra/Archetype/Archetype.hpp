@@ -22,20 +22,20 @@
 
 #include "../Component/Component.hpp"
 #include "../Component/ComponentOps.hpp"
-#include "../Container/SmallVector.hpp"
 #include "../Container/Bitmap.hpp"
-#include "../Memory/ChunkPool.hpp"
+#include "../Container/SmallVector.hpp"
 #include "../Core/Base.hpp"
-#include "../Memory/Memory.hpp"
 #include "../Core/Result.hpp"
 #include "../Core/TypeID.hpp"
 #include "../Entity/Entity.hpp"
+#include "../Memory/ChunkPool.hpp"
+#include "../Memory/Memory.hpp"
 #include "../Platform/Hardware.hpp"
 #include "../Platform/Platform.hpp"
 #include "../Platform/Simd.hpp"
-#include "ArchetypeEdgeStorage.hpp"
-#include "../Serialization/BinaryWriter.hpp"
 #include "../Serialization/BinaryReader.hpp"
+#include "../Serialization/BinaryWriter.hpp"
+#include "ArchetypeEdgeStorage.hpp"
 
 namespace Astra
 {
@@ -54,12 +54,12 @@ namespace Astra
         uint32_t chunkIndex;
         uint32_t entityIndex;
         
-        constexpr PackedLocation() noexcept 
-            : chunkIndex(std::numeric_limits<uint32_t>::max())
-            , entityIndex(std::numeric_limits<uint32_t>::max()) {}
+        constexpr PackedLocation() noexcept :
+            chunkIndex(std::numeric_limits<uint32_t>::max()),
+            entityIndex(std::numeric_limits<uint32_t>::max())
+        {}
         
-        constexpr PackedLocation(uint32_t chunk, uint32_t entity) noexcept 
-            : chunkIndex(chunk), entityIndex(entity) {}
+        constexpr PackedLocation(uint32_t chunk, uint32_t entity) noexcept : chunkIndex(chunk), entityIndex(entity) {}
         
         ASTRA_NODISCARD constexpr static PackedLocation Pack(size_t chunkIdx, size_t entityIdx, size_t) noexcept
         {
@@ -81,7 +81,6 @@ namespace Astra
             return chunkIndex != std::numeric_limits<uint32_t>::max();
         }
         
-        // For compatibility with code that may use raw representation
         ASTRA_NODISCARD constexpr size_t Raw() const noexcept 
         { 
             return (static_cast<size_t>(chunkIndex) << 32) | entityIndex; 
@@ -97,8 +96,7 @@ namespace Astra
         }
         constexpr bool operator<(const PackedLocation& other) const noexcept 
         { 
-            return chunkIndex < other.chunkIndex || 
-                   (chunkIndex == other.chunkIndex && entityIndex < other.entityIndex); 
+            return chunkIndex < other.chunkIndex || (chunkIndex == other.chunkIndex && entityIndex < other.entityIndex); 
         }
         constexpr bool operator>(const PackedLocation& other) const noexcept 
         { 
@@ -114,12 +112,6 @@ namespace Astra
         }
     };
     
-    enum class ArchetypeError
-    {
-        OutOfMemory,
-        InvalidChunkSize,
-    };
-    
     template<Component... Components>
     ASTRA_NODISCARD constexpr ComponentMask MakeComponentMask() noexcept
     {
@@ -128,26 +120,12 @@ namespace Astra
         return mask;
     }
     
-    /**
-     * Archetype represents a unique combination of components.
-     * Uses chunked memory with Structure of Arrays (SoA) layout.
-     * 
-     * Key features:
-     * - 16KB chunks for L1 cache efficiency
-     * - SoA layout within each chunk
-     * - Zero fragmentation through chunk recycling
-     * - Automatic chunk management
-     * - Power-of-2 entities per chunk for fast indexing via bitmasking
-     */
     class Archetype
     {
         class Chunk;
         struct ChunkDeleter;
     
     public:
-        // Ensure chunk size is as expected for our optimizations
-        
-        
         // Chunk utilization metrics for coalescing
         struct ChunkMetrics
         {
@@ -158,7 +136,7 @@ namespace Astra
         
         explicit Archetype(ComponentMask mask) :
             m_mask(mask),
-            m_componentCount(mask.Count()),  // Cache component count
+            m_componentCount(mask.Count()), // Cache component count
             m_entityCount(0),
             m_entitiesPerChunk(0),
             m_entitiesPerChunkShift(0),
