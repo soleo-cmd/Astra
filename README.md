@@ -55,7 +55,7 @@ int main() {
   - MSVC 2019+ (Windows)
   - GCC 9+ (Linux)
   - Clang 10+ (macOS/Linux)
-- CMake 3.16+ or Premake5
+- Premake5
 
 ### Build Instructions
 
