@@ -35,7 +35,7 @@ int main() {
         Velocity{1, 0, 0}
     );
     
-    // Query and iterate - 1.05ns per entity at 10K scale
+    // Query and iterate
     auto view = registry.CreateView<Position, Velocity>();
     view.ForEach([](Astra::Entity e, Position& pos, Velocity& vel) {
         pos.x += vel.dx;
