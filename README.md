@@ -35,7 +35,7 @@ int main() {
         Velocity{1, 0, 0}
     );
     
-    // Query and iterate - 1.05ns per entity at 10K scale
+    // Query and iterate
     auto view = registry.CreateView<Position, Velocity>();
     view.ForEach([](Astra::Entity e, Position& pos, Velocity& vel) {
         pos.x += vel.dx;
@@ -55,7 +55,7 @@ int main() {
   - MSVC 2019+ (Windows)
   - GCC 9+ (Linux)
   - Clang 10+ (macOS/Linux)
-- CMake 3.16+ or Premake5
+- Premake5
 
 ### Build Instructions
 
@@ -203,16 +203,14 @@ auto enemies = registry.CreateView<Position, Enemy, Astra::Not<Dead>>();
 auto targets = registry.CreateView<Position, Astra::Any<Player, Enemy>>();
 auto renderables = registry.CreateView<Transform, Astra::Optional<Sprite>>();
 
-// Iteration methods
+// Iteration methods (Optimized)
 view.ForEach([](Astra::Entity e, Position& pos, Velocity& vel) {
-    // ForEach - Fastest (~1.05ns/entity)
     pos.x += vel.dx;
 });
 
-// Or use range-based for loop
+// Or use range-based for loop (Slower)
 for (auto [entity, pos, vel] : view)
 {
-    // Range-based - Clean syntax (~3-4ns/entity)
     pos->x += vel->dx;
 }
 ```
@@ -340,6 +338,63 @@ void UpdateWorldTransforms(Astra::Registry& registry, Astra::Entity root) {
 ## Benchmarking
 
 Run the included benchmarks!
+
+```bash
+Run on (20 X 3610 MHz CPU s)
+CPU Caches:
+  L1 Data 48 KiB (x10)
+  L1 Instruction 32 KiB (x10)
+  L2 Unified 1280 KiB (x10)
+  L3 Unified 25600 KiB (x1)
+-----------------------------------------------------------------------------------------------
+Benchmark                                     Time             CPU   Iterations UserCounters...
+-----------------------------------------------------------------------------------------------
+BM_CreateEntities/10000                 2360936 ns      2351589 ns          299 items_per_second=4.25244M/s
+BM_CreateEntities/100000               21498662 ns     21484375 ns           32 items_per_second=4.65455M/s
+BM_CreateEntities/1000000             268167600 ns    270833333 ns            3 items_per_second=3.69231M/s
+BM_CreateEntitiesBatch/10000            1092974 ns      1098633 ns          640 items_per_second=9.10222M/s
+BM_CreateEntitiesBatch/100000          12828623 ns     12276786 ns           56 items_per_second=8.14545M/s
+BM_CreateEntitiesBatch/1000000        193051900 ns    191406250 ns            4 items_per_second=5.22449M/s
+BM_AddComponents/10000                  2596141 ns      2259036 ns          249 items_per_second=8.85333M/s
+BM_AddComponents/100000                28814623 ns     29829545 ns           22 items_per_second=6.70476M/s
+BM_AddComponents/1000000              424144600 ns    429687500 ns            2 items_per_second=4.65455M/s
+BM_RemoveComponents/10000               2002010 ns      1988002 ns          448 items_per_second=5.03018M/s
+BM_RemoveComponents/100000             22746728 ns     18554688 ns           32 items_per_second=5.38947M/s
+BM_RemoveComponents/1000000           339848600 ns    335937500 ns            2 items_per_second=2.97674M/s
+BM_IterateSingleComponent/10000           10210 ns        10254 ns        64000 items_per_second=975.238M/s
+BM_IterateSingleComponent/100000         109692 ns       109863 ns         6400 items_per_second=910.222M/s
+BM_IterateSingleComponent/1000000       1397911 ns      1380522 ns          498 items_per_second=724.364M/s
+BM_IterateTwoComponents/10000             21495 ns        21484 ns        32000 items_per_second=465.455M/s
+BM_IterateTwoComponents/100000           230868 ns       230164 ns         2987 items_per_second=434.473M/s
+BM_IterateTwoComponents/1000000         3482104 ns      3447770 ns          213 items_per_second=290.043M/s
+BM_IterateTwoComponentsHalf/10000         11996 ns        11998 ns        56000 items_per_second=416.744M/s
+BM_IterateTwoComponentsHalf/100000       127255 ns       125552 ns         4978 items_per_second=398.24M/s
+BM_IterateTwoComponentsHalf/1000000     1535674 ns      1534598 ns          448 items_per_second=325.818M/s
+BM_IterateTwoComponentsOne/10000           4.03 ns         4.01 ns    179200000 items_per_second=249.322M/s
+BM_IterateTwoComponentsOne/100000          3.98 ns         3.90 ns    172307692 items_per_second=256.458M/s
+BM_IterateTwoComponentsOne/1000000         3.98 ns         3.90 ns    172307692 items_per_second=256.458M/s
+BM_IterateThreeComponents/10000           28744 ns        28878 ns        24889 items_per_second=346.282M/s
+BM_IterateThreeComponents/100000         303046 ns       304813 ns         2358 items_per_second=328.07M/s
+BM_IterateThreeComponents/1000000       5032185 ns      4800452 ns          166 items_per_second=208.314M/s
+BM_IterateFiveComponents/10000            44993 ns        44922 ns        16000 items_per_second=222.609M/s
+BM_IterateFiveComponents/100000          473957 ns       450017 ns         1493 items_per_second=222.214M/s
+BM_IterateFiveComponents/1000000        5792779 ns      5859375 ns          112 items_per_second=170.667M/s
+BM_GetComponent/10000                    223689 ns       219727 ns         3200 items_per_second=45.5111M/s
+BM_GetComponent/100000                  3049325 ns      3012048 ns          249 items_per_second=33.2M/s
+BM_GetComponent/1000000                80999571 ns     82589286 ns            7 items_per_second=12.1081M/s
+BM_GetMultipleComponents/10000           361544 ns       360695 ns         2036 items_per_second=55.4485M/s
+BM_GetMultipleComponents/100000         4726483 ns      4718960 ns          149 items_per_second=42.3822M/s
+BM_GetMultipleComponents/1000000      156609500 ns    156250000 ns            5 items_per_second=12.8M/s
+BM_HierarchyTraversal/1000               167075 ns       167411 ns         4480 items_per_second=8.1536M/s
+BM_HierarchyTraversal/10000              164674 ns       163923 ns         4480 items_per_second=8.32708M/s
+BM_HierarchyTraversal/100000           14780162 ns     13935811 ns           37 items_per_second=4.01749M/s
+BM_HierarchyForEach/1000                 205527 ns       195312 ns         3200 items_per_second=6.9888M/s
+BM_HierarchyForEach/10000                211764 ns       209961 ns         3200 items_per_second=6.50121M/s
+BM_HierarchyForEach/100000             13131222 ns     13194444 ns           45 items_per_second=4.24323M/s
+BM_FilteredHierarchyTraversal/1000       194031 ns       188354 ns         3733 items_per_second=3.62084M/s
+BM_FilteredHierarchyTraversal/10000      187650 ns       188354 ns         3733 items_per_second=3.62084M/s
+BM_FilteredHierarchyTraversal/100000   13380480 ns     13392857 ns           56 items_per_second=2.09014M/s
+```
 
 ## Contributing
 
