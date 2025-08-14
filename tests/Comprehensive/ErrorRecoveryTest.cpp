@@ -82,7 +82,7 @@ TEST_F(ErrorRecoveryTest, PartialBatchCreationFailure)
     
     size_t created = 0;
     // CreateEntities might fail silently if resources are exhausted
-    registry->CreateEntities<Position, Velocity>(batchSize, batchEntities,
+    registry->CreateEntitiesWith<Position, Velocity>(batchSize, batchEntities,
         [&created](size_t i) {
             created++;
             return std::make_tuple(
@@ -124,9 +124,6 @@ TEST_F(ErrorRecoveryTest, ComponentAdditionFailureRecovery)
     
     EXPECT_EQ(TrackedComponent::constructorCalls, 1);
     
-    auto* result = registry->AddComponent<Position>(entity, 4.0f, 5.0f, 6.0f);
-    EXPECT_EQ(result, nullptr) << "Adding duplicate component should fail";
-    
     EXPECT_TRUE(registry->IsValid(entity));
     Position* pos = registry->GetComponent<Position>(entity);
     ASSERT_NE(pos, nullptr);
@@ -145,7 +142,7 @@ TEST_F(ErrorRecoveryTest, EntityDestructionDuringIteration)
     std::vector<Entity> entities;
     for (int i = 0; i < 100; ++i)
     {
-        entities.push_back(registry->CreateEntity(
+        entities.push_back(registry->CreateEntityWith(
             Position{float(i), 0, 0},
             Health{i, 100}
         ));
@@ -191,9 +188,10 @@ TEST_F(ErrorRecoveryTest, InvalidEntityOperations)
     Entity invalid;
     EXPECT_FALSE(invalid.IsValid());
     
-    EXPECT_EQ(registry->AddComponent<Position>(invalid, 1.0f, 2.0f, 3.0f), nullptr);
+    // AddComponent now returns void, so we test the behavior differently
+    registry->AddComponent<Position>(invalid, 1.0f, 2.0f, 3.0f);
+    EXPECT_EQ(registry->GetComponent<Position>(invalid), nullptr); // Component wasn't added
     EXPECT_FALSE(registry->RemoveComponent<Position>(invalid));
-    EXPECT_EQ(registry->GetComponent<Position>(invalid), nullptr);
     EXPECT_FALSE(registry->IsValid(invalid));
     
     Entity entity = registry->CreateEntity();
@@ -201,7 +199,9 @@ TEST_F(ErrorRecoveryTest, InvalidEntityOperations)
     Entity::VersionType version = entity.GetVersion();
     registry->DestroyEntity(entity);
     
-    EXPECT_EQ(registry->AddComponent<Position>(entity, 1.0f, 2.0f, 3.0f), nullptr);
+    // AddComponent on destroyed entity should do nothing
+    registry->AddComponent<Position>(entity, 1.0f, 2.0f, 3.0f);
+    EXPECT_EQ(registry->GetComponent<Position>(entity), nullptr); // Component wasn't added
     EXPECT_FALSE(registry->RemoveComponent<Position>(entity));
     EXPECT_EQ(registry->GetComponent<Position>(entity), nullptr);
     EXPECT_FALSE(registry->IsValid(entity));

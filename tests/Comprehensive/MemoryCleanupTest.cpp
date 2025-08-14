@@ -3,7 +3,7 @@
 #include <memory>
 #include <algorithm>
 #include "Astra/Registry/Registry.hpp"
-#include "Astra/Memory/ChunkPool.hpp"
+#include "Astra/Archetype/ArchetypeChunkPool.hpp"
 #include "../TestComponents.hpp"
 
 using namespace Astra;
@@ -46,7 +46,7 @@ TEST_F(MemoryCleanupTest, MemoryReleasedAfterDestruction)
     std::vector<Entity> entities;
     for (int i = 0; i < 1000; ++i)
     {
-        entities.push_back(registry->CreateEntity(
+        entities.push_back(registry->CreateEntityWith(
             Position{float(i), float(i * 2), float(i * 3)},
             Velocity{float(i * 10), 0, 0},
             Health{i, 1000}
@@ -115,40 +115,50 @@ TEST_F(MemoryCleanupTest, RapidArchetypeTransitionCleanup)
     EXPECT_LT(afterCleanup, beforeCleanup) << "Archetype count should decrease";
 }
 
-TEST_F(MemoryCleanupTest, ChunkPoolMemoryRelease)
+TEST_F(MemoryCleanupTest, ArchetypeChunkPoolMemoryRelease)
 {
-    ChunkPool::Config config;
+    ArchetypeChunkPool::Config config;
     config.chunksPerBlock = 4;
     config.maxChunks = 100;
     config.initialBlocks = 1;
     
-    ChunkPool pool(config);
+    ArchetypeChunkPool pool(config);
     
-    std::vector<void*> chunks;
+    // Create test component descriptors
+    std::vector<ComponentDescriptor> descriptors;
+    ComponentDescriptor posDesc;
+    posDesc.id = 0;
+    posDesc.size = sizeof(Position);
+    posDesc.alignment = alignof(Position);
+    descriptors.push_back(posDesc);
+    
+    std::vector<std::unique_ptr<ArchetypeChunk, ArchetypeChunkPool::ChunkDeleter>> chunks;
+    size_t entitiesPerChunk = 100;
+    
     for (int i = 0; i < 20; ++i)
     {
-        void* chunk = pool.Acquire();
+        auto chunk = pool.CreateChunk(entitiesPerChunk, descriptors);
         ASSERT_NE(chunk, nullptr);
-        chunks.push_back(chunk);
+        chunks.push_back(std::move(chunk));
     }
     
     auto stats1 = pool.GetStats();
     EXPECT_EQ(stats1.acquireCount - stats1.releaseCount, 20u);
     EXPECT_GT(stats1.totalChunks, 0u);
     
+    // Release first 10 chunks
     for (int i = 0; i < 10; ++i)
     {
-        pool.Release(chunks[i]);
+        chunks[i].reset();
     }
+    chunks.erase(chunks.begin(), chunks.begin() + 10);
     
     auto stats2 = pool.GetStats();
     EXPECT_EQ(stats2.acquireCount - stats2.releaseCount, 10u);
     EXPECT_EQ(stats2.totalChunks, stats1.totalChunks) << "Total chunks should remain (pooled)";
     
-    for (int i = 10; i < 20; ++i)
-    {
-        pool.Release(chunks[i]);
-    }
+    // Release remaining chunks
+    chunks.clear();
     
     auto stats3 = pool.GetStats();
     EXPECT_EQ(stats3.acquireCount - stats3.releaseCount, 0u);
@@ -264,7 +274,7 @@ TEST_F(MemoryCleanupTest, ClearMemoryCleanup)
         std::vector<Entity> entities;
         for (int i = 0; i < 200; ++i)
         {
-            entities.push_back(registry->CreateEntity(
+            entities.push_back(registry->CreateEntityWith(
                 Position{float(i), 0, 0},
                 Velocity{1, 0, 0}
             ));
@@ -304,13 +314,13 @@ TEST_F(MemoryCleanupTest, CleanupOptionsRespected)
     std::vector<Entity> persistent;
     for (int i = 0; i < 10; ++i)
     {
-        persistent.push_back(registry->CreateEntity(Position{}));
+        persistent.push_back(registry->CreateEntityWith(Position{}));
     }
     
     std::vector<Entity> temporary;
     for (int i = 0; i < 10; ++i)
     {
-        temporary.push_back(registry->CreateEntity(Position{}, Velocity{}));
+        temporary.push_back(registry->CreateEntityWith(Position{}, Velocity{}));
     }
     
     registry->DestroyEntities(temporary);

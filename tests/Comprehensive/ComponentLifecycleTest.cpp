@@ -320,7 +320,7 @@ TEST_F(ComponentLifecycleTest, BatchOperationLifecycle)
     const size_t batchSize = 100;
     std::vector<Entity> entities(batchSize);
     
-    registry->CreateEntities<LifecycleComponent, Position>(batchSize, entities,
+    registry->CreateEntitiesWith<LifecycleComponent, Position>(batchSize, entities,
         [](size_t i) {
             return std::make_tuple(
                 LifecycleComponent(int(i)),

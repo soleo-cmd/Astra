@@ -52,7 +52,8 @@ namespace Astra
         // Test a bit
         ASTRA_NODISCARD bool Test(size_t index) const noexcept
         {
-            if (index >= Bits) ASTRA_UNLIKELY return false;
+            if (index >= Bits) ASTRA_UNLIKELY
+                return false;
             const size_t word = index / BITS_PER_WORD;
             const size_t bit = index % BITS_PER_WORD;
             return (m_words[word] & (Word(1) << bit)) != 0;
@@ -69,13 +70,17 @@ namespace Astra
                 auto result = Simd::Ops::And128(this128, mask128);
                 
                 if (!Simd::Ops::TestEqual128(result, mask128)) ASTRA_UNLIKELY
+                {
                     return false;
+                }
                     
                 // Check remaining words
                 for (size_t i = SIMD_WORDS; i < WORD_COUNT; ++i) ASTRA_UNLIKELY
                 {
                     if ((m_words[i] & mask.m_words[i]) != mask.m_words[i]) ASTRA_UNLIKELY
+                    {
                         return false;
+                    }
                 }
             }
             else
@@ -84,7 +89,9 @@ namespace Astra
                 for (size_t i = 0; i < WORD_COUNT; ++i) ASTRA_LIKELY
                 {
                     if ((m_words[i] & mask.m_words[i]) != mask.m_words[i]) ASTRA_UNLIKELY
+                    {
                         return false;
+                    }
                 }
             }
             return true;
@@ -99,18 +106,21 @@ namespace Astra
                 auto other128 = Simd::Ops::Load128(other.m_words.data());
                 
                 if (!Simd::Ops::TestEqual128(this128, other128)) ASTRA_UNLIKELY
+                {
                     return false;
+                }
                     
                 for (size_t i = SIMD_WORDS; i < WORD_COUNT; ++i) ASTRA_UNLIKELY
                 {
                     if (m_words[i] != other.m_words[i]) ASTRA_UNLIKELY
+                    {
                         return false;
+                    }
                 }
             }
             else
             {
-                return std::memcmp(m_words.data(), other.m_words.data(), 
-                                  sizeof(Word) * WORD_COUNT) == 0;
+                return std::memcmp(m_words.data(), other.m_words.data(), sizeof(Word) * WORD_COUNT) == 0;
             }
             return true;
         }
@@ -170,12 +180,10 @@ namespace Astra
         
         // SIMD batch check: Check if multiple bitmaps have all bits from mask
         // Returns a bitmask where bit i is set if bitmaps[i].HasAll(mask)
-        ASTRA_NODISCARD static uint32_t BatchHasAll(
-            const Bitmap* bitmaps, 
-            size_t count, 
-            const Bitmap& mask) noexcept
+        ASTRA_NODISCARD static uint32_t BatchHasAll(const Bitmap* bitmaps, size_t count, const Bitmap& mask) noexcept
         {
-            if (count == 0) ASTRA_UNLIKELY return 0;
+            if (count == 0) ASTRA_UNLIKELY
+                return 0;
             
             uint32_t results = 0;
             

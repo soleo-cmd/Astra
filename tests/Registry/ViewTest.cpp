@@ -275,8 +275,8 @@ TEST_F(ViewTest, ViewInvalidation)
     using namespace Astra::Test;
     
     // Create initial entities
-    Astra::Entity e1 = registry->CreateEntity(Position{1.0f, 2.0f, 3.0f});
-    Astra::Entity e2 = registry->CreateEntity(Position{4.0f, 5.0f, 6.0f}, Velocity{1.0f, 0.0f, 0.0f});
+    Astra::Entity e1 = registry->CreateEntityWith(Position{1.0f, 2.0f, 3.0f});
+    Astra::Entity e2 = registry->CreateEntityWith(Position{4.0f, 5.0f, 6.0f}, Velocity{1.0f, 0.0f, 0.0f});
     
     auto view = registry->CreateView<Position, Velocity>();
     
@@ -401,7 +401,7 @@ TEST_F(ViewTest, ModificationDuringIteration)
     std::vector<Astra::Entity> entities;
     for (int i = 0; i < 10; ++i)
     {
-        entities.push_back(registry->CreateEntity(Position{float(i), 0.0f, 0.0f}));
+        entities.push_back(registry->CreateEntityWith(Position{float(i), 0.0f, 0.0f}));
     }
     
     auto view = registry->CreateView<Position>();

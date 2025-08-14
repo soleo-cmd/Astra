@@ -461,11 +461,11 @@ TEST_F(ArchetypeStorageTest, EntityLocationTracking)
     
     // Add entity to archetype and set location
     Astra::Entity entity(1, 1);
-    auto packedLoc = archetype->AddEntity(entity);
-    storage->SetEntityLocation(entity, archetype, packedLoc);
+    auto location = archetype->AddEntity(entity);
+    storage->SetEntityLocation(entity, archetype, location);
     
     // Should be able to get components
-    archetype->SetComponent(packedLoc, Position{1.0f, 2.0f, 3.0f});
+    archetype->SetComponent(location, Position{1.0f, 2.0f, 3.0f});
     
     Position* pos = storage->GetComponent<Position>(entity);
     ASSERT_NE(pos, nullptr);

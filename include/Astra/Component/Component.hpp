@@ -77,5 +77,61 @@ namespace Astra
         DeserializeFn* deserialize;                // Basic deserialization
         SerializeVersionedFn* serializeVersioned;  // Versioned serialization
         DeserializeVersionedFn* deserializeVersioned; // Versioned deserialization with migration
+        
+        // Member functions for component operations - exactly match ComponentOps behavior
+        inline void DefaultConstruct(void* ptr) const
+        {
+            if (is_trivially_copyable && is_nothrow_default_constructible)
+            {
+#ifdef ASTRA_BUILD_DEBUG
+                std::memset(ptr, 0, size);
+#endif
+            // In release, skip initialization for true POD types
+            }
+            else
+            {
+                defaultConstruct(ptr);
+            }
+        }
+        
+        inline void BatchDefaultConstruct(void* ptr, size_t count) const
+        {
+            if (is_empty)
+            {
+                return; // Nothing to do for empty types
+            }
+            
+            if (is_trivially_copyable && is_nothrow_default_constructible)
+            {
+                // For POD types, use memset for batch initialization
+                // This is much faster than calling default constructor in a loop
+                std::memset(ptr, 0, count * size);
+            }
+            else
+            {
+                std::byte* p = static_cast<std::byte*>(ptr);
+                for (size_t i = 0; i < count; ++i)
+                {
+                    defaultConstruct(p + i * size);
+                }
+            }
+        }
+        
+        inline void MoveConstruct(void* dst, void* src) const
+        {
+            if (is_trivially_copyable)
+            {
+                std::memcpy(dst, src, size);
+            }
+            else
+            {
+                moveConstruct(dst, src);
+            }
+        }
+        
+        inline void Destruct(void* ptr) const
+        {
+            destruct(ptr);
+        }
     };
 }

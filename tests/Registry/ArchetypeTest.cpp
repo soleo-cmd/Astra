@@ -14,7 +14,7 @@ class ArchetypeTest : public ::testing::Test
 {
 protected:
     Astra::ComponentRegistry registry;
-    Astra::ChunkPool chunkPool;
+    Astra::ArchetypeChunkPool componentPool;
     
     void SetUp() override 
     {
@@ -32,7 +32,7 @@ protected:
         {
             if (mask.Test(id))
             {
-                const auto* desc = registry.GetComponent(id);
+                const auto* desc = registry.GetComponentDescriptor(id);
                 if (desc)
                 {
                     descriptors.push_back(*desc);
@@ -51,6 +51,7 @@ TEST_F(ArchetypeTest, BasicCreationAndInitialization)
     // Create archetype with Position and Velocity components
     auto mask = Astra::MakeComponentMask<Position, Velocity>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     
     // Initially not initialized
     EXPECT_FALSE(archetype.IsInitialized());
@@ -85,22 +86,23 @@ TEST_F(ArchetypeTest, AddSingleEntity)
     
     auto mask = Astra::MakeComponentMask<Position>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     archetype.Initialize(GetDescriptors(mask));
     
     // Add an entity
     Astra::Entity entity(1, 1);
-    auto packedLoc = archetype.AddEntity(entity);
+    auto location = archetype.AddEntity(entity);
     
     // Should be valid location
-    EXPECT_TRUE(packedLoc.IsValid());
+    EXPECT_TRUE(location.IsValid());
     EXPECT_EQ(archetype.GetEntityCount(), 1u);
     
     // Should be able to get the entity back
-    EXPECT_EQ(archetype.GetEntity(packedLoc), entity);
+    EXPECT_EQ(archetype.GetEntity(location), entity);
     
     // Should be in first chunk at index 0
-    EXPECT_EQ(packedLoc.GetChunkIndex(archetype.GetEntitiesPerChunkShift()), 0u);
-    EXPECT_EQ(packedLoc.GetEntityIndex(archetype.GetEntitiesPerChunkMask()), 0u);
+    EXPECT_EQ(location.GetChunkIndex(), 0u);
+    EXPECT_EQ(location.GetEntityIndex(), 0u);
 }
 
 // Test adding multiple entities
@@ -110,10 +112,11 @@ TEST_F(ArchetypeTest, AddMultipleEntities)
     
     auto mask = Astra::MakeComponentMask<Position, Velocity>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     archetype.Initialize(GetDescriptors(mask));
     
     std::vector<Astra::Entity> entities;
-    std::vector<Astra::PackedLocation> locations;
+    std::vector<Astra::EntityLocation> locations;
     
     // Add 100 entities
     for (int i = 0; i < 100; ++i)
@@ -134,7 +137,7 @@ TEST_F(ArchetypeTest, AddMultipleEntities)
         // Check uniqueness
         for (size_t j = i + 1; j < locations.size(); ++j)
         {
-            EXPECT_NE(locations[i].Raw(), locations[j].Raw());
+            EXPECT_NE(locations[i], locations[j]);
         }
     }
 }
@@ -146,6 +149,7 @@ TEST_F(ArchetypeTest, BatchAddEntities)
     
     auto mask = Astra::MakeComponentMask<Position, Health>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     archetype.Initialize(GetDescriptors(mask));
     
     // Create batch of entities
@@ -176,11 +180,12 @@ TEST_F(ArchetypeTest, RemoveSingleEntity)
     
     auto mask = Astra::MakeComponentMask<Position>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     archetype.Initialize(GetDescriptors(mask));
     
     // Add some entities
     std::vector<Astra::Entity> entities;
-    std::vector<Astra::PackedLocation> locations;
+    std::vector<Astra::EntityLocation> locations;
     for (int i = 0; i < 5; ++i)
     {
         Astra::Entity entity(i, 1);
@@ -211,6 +216,7 @@ TEST_F(ArchetypeTest, GetAndSetComponents)
     
     auto mask = Astra::MakeComponentMask<Position, Velocity>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     archetype.Initialize(GetDescriptors(mask));
     
     // Add entity
@@ -252,6 +258,7 @@ TEST_F(ArchetypeTest, ForEachIteration)
     
     auto mask = Astra::MakeComponentMask<Position, Velocity>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     archetype.Initialize(GetDescriptors(mask));
     
     // Add entities with specific values
@@ -294,6 +301,7 @@ TEST_F(ArchetypeTest, ChunkAllocationAndCapacity)
     // Use small components to get more entities per chunk
     auto mask = Astra::MakeComponentMask<Position>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     archetype.Initialize(GetDescriptors(mask));
     
     size_t entitiesPerChunk = archetype.GetEntitiesPerChunk();
@@ -319,6 +327,7 @@ TEST_F(ArchetypeTest, EmptyArchetype)
     // Create archetype with no components
     Astra::ComponentMask mask;
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     
     std::vector<Astra::ComponentDescriptor> descriptors; // Empty
     archetype.Initialize(descriptors);
@@ -334,22 +343,20 @@ TEST_F(ArchetypeTest, EmptyArchetype)
     EXPECT_EQ(archetype.GetEntity(location), entity);
 }
 
-// Test packed location operations
-TEST_F(ArchetypeTest, PackedLocationOperations)
+TEST_F(ArchetypeTest, EntityLocationOperations)
 {
-    // Test packing and unpacking
+    // Test creating and accessing entity location
     size_t chunkIdx = 5;
     size_t entityIdx = 123;
-    size_t shift = 8; // 256 entities per chunk
     
-    auto packed = Astra::PackedLocation::Pack(chunkIdx, entityIdx, shift);
+    auto location = Astra::EntityLocation::Create(chunkIdx, entityIdx);
     
-    EXPECT_EQ(packed.GetChunkIndex(shift), chunkIdx);
-    EXPECT_EQ(packed.GetEntityIndex((1u << shift) - 1), entityIdx);
-    EXPECT_TRUE(packed.IsValid());
+    EXPECT_EQ(location.GetChunkIndex(), chunkIdx);
+    EXPECT_EQ(location.GetEntityIndex(), entityIdx);
+    EXPECT_TRUE(location.IsValid());
     
     // Test invalid location
-    Astra::PackedLocation invalid;
+    Astra::EntityLocation invalid;
     EXPECT_FALSE(invalid.IsValid());
 }
 
@@ -390,11 +397,12 @@ TEST_F(ArchetypeTest, BatchRemoveEntities)
     
     auto mask = Astra::MakeComponentMask<Position, Velocity>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     archetype.Initialize(GetDescriptors(mask));
     
     // Add entities
     std::vector<Astra::Entity> entities;
-    std::vector<Astra::PackedLocation> locations;
+    std::vector<Astra::EntityLocation> locations;
     
     for (int i = 0; i < 20; ++i)
     {
@@ -410,7 +418,7 @@ TEST_F(ArchetypeTest, BatchRemoveEntities)
     EXPECT_EQ(archetype.GetEntityCount(), 20u);
     
     // Remove every other entity
-    std::vector<Astra::PackedLocation> toRemove;
+    std::vector<Astra::EntityLocation> toRemove;
     for (size_t i = 0; i < locations.size(); i += 2)
     {
         toRemove.push_back(locations[i]);
@@ -439,11 +447,13 @@ TEST_F(ArchetypeTest, MoveEntityBetweenArchetypes)
     // Create source archetype with Position only
     auto srcMask = Astra::MakeComponentMask<Position>();
     Astra::Archetype srcArchetype(srcMask);
+    srcArchetype.SetComponentPool(&componentPool);
     srcArchetype.Initialize(GetDescriptors(srcMask));
     
     // Create destination archetype with Position and Velocity
     auto dstMask = Astra::MakeComponentMask<Position, Velocity>();
     Astra::Archetype dstArchetype(dstMask);
+    dstArchetype.SetComponentPool(&componentPool);
     dstArchetype.Initialize(GetDescriptors(dstMask));
     
     // Add entity to source
@@ -479,6 +489,7 @@ TEST_F(ArchetypeTest, EnsureCapacity)
     
     auto mask = Astra::MakeComponentMask<Position>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     archetype.Initialize(GetDescriptors(mask));
     
     // Pre-allocate for many entities
@@ -501,6 +512,7 @@ TEST_F(ArchetypeTest, CalculateRemainingCapacity)
     
     auto mask = Astra::MakeComponentMask<Position>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     archetype.Initialize(GetDescriptors(mask));
     
     size_t entitiesPerChunk = archetype.GetEntitiesPerChunk();
@@ -528,13 +540,14 @@ TEST_F(ArchetypeTest, ChunkCoalescing)
     
     auto mask = Astra::MakeComponentMask<Position>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     archetype.Initialize(GetDescriptors(mask));
     
     size_t entitiesPerChunk = archetype.GetEntitiesPerChunk();
     
     // Fill multiple chunks
     size_t totalEntities = entitiesPerChunk * 3;
-    std::vector<Astra::PackedLocation> locations;
+    std::vector<Astra::EntityLocation> locations;
     
     for (size_t i = 0; i < totalEntities; ++i)
     {
@@ -542,7 +555,7 @@ TEST_F(ArchetypeTest, ChunkCoalescing)
     }
     
     // Remove many entities to create sparse chunks
-    std::vector<Astra::PackedLocation> toRemove;
+    std::vector<Astra::EntityLocation> toRemove;
     // Remove 80% of entities from chunks 1 and 2
     for (size_t i = entitiesPerChunk; i < totalEntities; ++i)
     {
@@ -587,11 +600,13 @@ TEST_F(ArchetypeTest, DifferentComponentSizes)
     // Small components
     auto smallMask = Astra::MakeComponentMask<Player, Enemy>(); // Empty components
     Astra::Archetype smallArchetype(smallMask);
+    smallArchetype.SetComponentPool(&componentPool);
     smallArchetype.Initialize(GetDescriptors(smallMask));
     
     // Large components  
     auto largeMask = Astra::MakeComponentMask<Transform, Name>(); // Transform has 16 floats, Name has string
     Astra::Archetype largeArchetype(largeMask);
+    largeArchetype.SetComponentPool(&componentPool);
     largeArchetype.Initialize(GetDescriptors(largeMask));
     
     // Small components should fit more entities per chunk
@@ -618,6 +633,7 @@ TEST_F(ArchetypeTest, StressTestManyEntities)
     
     auto mask = Astra::MakeComponentMask<Position, Velocity, Health>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     archetype.Initialize(GetDescriptors(mask));
     
     const size_t entityCount = 10000;
@@ -660,6 +676,7 @@ TEST_F(ArchetypeTest, ChunkBoundaryConditions)
     
     auto mask = Astra::MakeComponentMask<Position>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     archetype.Initialize(GetDescriptors(mask));
     
     size_t entitiesPerChunk = archetype.GetEntitiesPerChunk();
@@ -687,11 +704,12 @@ TEST_F(ArchetypeTest, ComponentAccessPatterns)
     
     auto mask = Astra::MakeComponentMask<Position, Velocity, Health>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     archetype.Initialize(GetDescriptors(mask));
     
     // Add entities
     const size_t count = 100;
-    std::vector<Astra::PackedLocation> locations;
+    std::vector<Astra::EntityLocation> locations;
     
     for (size_t i = 0; i < count; ++i)
     {
@@ -737,6 +755,7 @@ TEST_F(ArchetypeTest, MaximumComponents)
     // Create mask with many components
     auto mask = Astra::MakeComponentMask<Position, Velocity, Health, Transform, Name, Physics>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     
     auto descriptors = GetDescriptors(mask);
     EXPECT_EQ(descriptors.size(), 6u);
@@ -765,6 +784,7 @@ TEST_F(ArchetypeTest, SerializeEmptyArchetype)
     // Create archetype with Position and Velocity
     auto mask = Astra::MakeComponentMask<Position, Velocity>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     
     auto descriptors = GetDescriptors(mask);
     archetype.Initialize(descriptors);
@@ -784,7 +804,7 @@ TEST_F(ArchetypeTest, SerializeEmptyArchetype)
         std::vector<Astra::ComponentDescriptor> registryDescriptors;
         registry.GetAllDescriptors(registryDescriptors);
         
-        auto deserializedArchetype = Astra::Archetype::Deserialize(reader, registryDescriptors, &chunkPool);
+        auto deserializedArchetype = Astra::Archetype::Deserialize(reader, registryDescriptors, &componentPool);
         
         ASSERT_NE(deserializedArchetype, nullptr);
         
@@ -804,6 +824,7 @@ TEST_F(ArchetypeTest, SerializeWithEntities)
     // Create and populate archetype
     auto mask = Astra::MakeComponentMask<Position, Velocity, Health>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     
     auto descriptors = GetDescriptors(mask);
     archetype.Initialize(descriptors);
@@ -811,14 +832,14 @@ TEST_F(ArchetypeTest, SerializeWithEntities)
     // Add entities with component data
     const size_t entityCount = 100;
     std::vector<Astra::Entity> entities;
-    std::vector<Astra::PackedLocation> locations;
+    std::vector<Astra::EntityLocation> locations;
     
     for (size_t i = 0; i < entityCount; ++i)
     {
         Astra::Entity entity(static_cast<Astra::Entity::Type>(i), 1);
         entities.push_back(entity);
         
-        Astra::PackedLocation loc = archetype.AddEntity(entity);
+        Astra::EntityLocation loc = archetype.AddEntity(entity);
         ASSERT_TRUE(loc.IsValid());
         locations.push_back(loc);
         
@@ -843,7 +864,7 @@ TEST_F(ArchetypeTest, SerializeWithEntities)
         std::vector<Astra::ComponentDescriptor> registryDescriptors;
         registry.GetAllDescriptors(registryDescriptors);
         
-        auto deserializedArchetype = Astra::Archetype::Deserialize(reader, registryDescriptors, &chunkPool);
+        auto deserializedArchetype = Astra::Archetype::Deserialize(reader, registryDescriptors, &componentPool);
         
         ASSERT_NE(deserializedArchetype, nullptr);
         
@@ -870,10 +891,9 @@ TEST_F(ArchetypeTest, SerializeWithEntities)
                 ASSERT_NE(origIt, entities.end());
                 size_t i = std::distance(entities.begin(), origIt);
                 
-                // Create packed location for this entity in the chunk
                 size_t chunkIdx = &chunk - &chunks[0];
-                Astra::PackedLocation loc = Astra::PackedLocation::Pack(
-                    chunkIdx, idx, deserializedArchetype->GetEntitiesPerChunkShift());
+                Astra::EntityLocation loc = Astra::EntityLocation::Create(
+                    chunkIdx, idx);
                 
                 // Check Position
                 Position* pos = deserializedArchetype->GetComponent<Position>(loc);
@@ -911,6 +931,7 @@ TEST_F(ArchetypeTest, SerializeMultipleChunks)
     // Create archetype with small components to fit many per chunk
     auto mask = Astra::MakeComponentMask<Position, Player>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     
     auto descriptors = GetDescriptors(mask);
     archetype.Initialize(descriptors);
@@ -925,7 +946,7 @@ TEST_F(ArchetypeTest, SerializeMultipleChunks)
         Astra::Entity entity(static_cast<Astra::Entity::Type>(i), 1);
         entities.push_back(entity);
         
-        Astra::PackedLocation loc = archetype.AddEntity(entity);
+        Astra::EntityLocation loc = archetype.AddEntity(entity);
         ASSERT_TRUE(loc.IsValid());
         
         archetype.SetComponent(loc, Position{float(i), 0.0f, 0.0f});
@@ -948,7 +969,7 @@ TEST_F(ArchetypeTest, SerializeMultipleChunks)
         std::vector<Astra::ComponentDescriptor> registryDescriptors;
         registry.GetAllDescriptors(registryDescriptors);
         
-        auto deserializedArchetype = Astra::Archetype::Deserialize(reader, registryDescriptors, &chunkPool);
+        auto deserializedArchetype = Astra::Archetype::Deserialize(reader, registryDescriptors, &componentPool);
         
         ASSERT_NE(deserializedArchetype, nullptr);
         
@@ -972,10 +993,8 @@ TEST_F(ArchetypeTest, SerializeMultipleChunks)
                 ASSERT_NE(origIt, entities.end());
                 size_t i = std::distance(entities.begin(), origIt);
                 
-                // Create packed location
                 size_t chunkIdx = &chunk - &chunks[0];
-                Astra::PackedLocation loc = Astra::PackedLocation::Pack(
-                    chunkIdx, idx, deserializedArchetype->GetEntitiesPerChunkShift());
+                Astra::EntityLocation loc = Astra::EntityLocation::Create(chunkIdx, idx);
                 
                 Position* pos = deserializedArchetype->GetComponent<Position>(loc);
                 ASSERT_NE(pos, nullptr);
@@ -997,6 +1016,7 @@ TEST_F(ArchetypeTest, SerializeNonTrivialComponents)
     // Create archetype with non-trivial Name component (contains std::string)
     auto mask = Astra::MakeComponentMask<Position, Name>();
     Astra::Archetype archetype(mask);
+    archetype.SetComponentPool(&componentPool);
     
     auto descriptors = GetDescriptors(mask);
     archetype.Initialize(descriptors);
@@ -1010,7 +1030,7 @@ TEST_F(ArchetypeTest, SerializeNonTrivialComponents)
         Astra::Entity entity(static_cast<Astra::Entity::Type>(i), 1);
         entities.push_back(entity);
         
-        Astra::PackedLocation loc = archetype.AddEntity(entity);
+        Astra::EntityLocation loc = archetype.AddEntity(entity);
         ASSERT_TRUE(loc.IsValid());
         
         archetype.SetComponent(loc, Position{float(i), 0.0f, 0.0f});
@@ -1032,7 +1052,7 @@ TEST_F(ArchetypeTest, SerializeNonTrivialComponents)
         std::vector<Astra::ComponentDescriptor> registryDescriptors;
         registry.GetAllDescriptors(registryDescriptors);
         
-        auto deserializedArchetype = Astra::Archetype::Deserialize(reader, registryDescriptors, &chunkPool);
+        auto deserializedArchetype = Astra::Archetype::Deserialize(reader, registryDescriptors, &componentPool);
         
         ASSERT_NE(deserializedArchetype, nullptr);
         
@@ -1054,9 +1074,8 @@ TEST_F(ArchetypeTest, SerializeNonTrivialComponents)
                 ASSERT_NE(origIt, entities.end());
                 size_t i = std::distance(entities.begin(), origIt);
                 
-                // Create packed location
                 size_t chunkIdx = &chunk - &chunks[0];
-                Astra::PackedLocation loc = Astra::PackedLocation::Pack(chunkIdx, idx, deserializedArchetype->GetEntitiesPerChunkShift());
+                Astra::EntityLocation loc = Astra::EntityLocation::Create(chunkIdx, idx);
                 
                 Name* name = deserializedArchetype->GetComponent<Name>(loc);
                 ASSERT_NE(name, nullptr);

@@ -46,7 +46,7 @@ static void BM_CreateEntitiesBatch(benchmark::State& state)
     for(auto _ : state)
     {
         Astra::Registry registry;
-        registry.CreateEntities(count, entities, [](size_t)
+        registry.CreateEntitiesWith(count, entities, [](size_t)
         { 
             return std::tuple<>(); 
         });

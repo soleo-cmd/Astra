@@ -28,7 +28,7 @@ TEST_F(ComponentRegistryTest, BasicRegistration)
     
     // Get component descriptor
     Astra::ComponentID id = Astra::TypeID<Position>::Value();
-    const Astra::ComponentDescriptor* desc = registry.GetComponent(id);
+    const Astra::ComponentDescriptor* desc = registry.GetComponentDescriptor(id);
     
     ASSERT_NE(desc, nullptr);
     EXPECT_EQ(desc->id, id);
@@ -47,9 +47,9 @@ TEST_F(ComponentRegistryTest, MultipleRegistration)
     registry.RegisterComponents<Position, Velocity, Health>();
     
     // Verify all are registered
-    EXPECT_NE(registry.GetComponent(Astra::TypeID<Position>::Value()), nullptr);
-    EXPECT_NE(registry.GetComponent(Astra::TypeID<Velocity>::Value()), nullptr);
-    EXPECT_NE(registry.GetComponent(Astra::TypeID<Health>::Value()), nullptr);
+    EXPECT_NE(registry.GetComponentDescriptor(Astra::TypeID<Position>::Value()), nullptr);
+    EXPECT_NE(registry.GetComponentDescriptor(Astra::TypeID<Velocity>::Value()), nullptr);
+    EXPECT_NE(registry.GetComponentDescriptor(Astra::TypeID<Health>::Value()), nullptr);
 }
 
 // Test duplicate registration (should be idempotent)
@@ -59,10 +59,10 @@ TEST_F(ComponentRegistryTest, DuplicateRegistration)
     
     // Register component twice
     registry.RegisterComponent<Position>();
-    const Astra::ComponentDescriptor* desc1 = registry.GetComponent(Astra::TypeID<Position>::Value());
+    const Astra::ComponentDescriptor* desc1 = registry.GetComponentDescriptor(Astra::TypeID<Position>::Value());
     
     registry.RegisterComponent<Position>();
-    const Astra::ComponentDescriptor* desc2 = registry.GetComponent(Astra::TypeID<Position>::Value());
+    const Astra::ComponentDescriptor* desc2 = registry.GetComponentDescriptor(Astra::TypeID<Position>::Value());
     
     // Should be the same descriptor
     EXPECT_EQ(desc1, desc2);
@@ -79,7 +79,7 @@ TEST_F(ComponentRegistryTest, ComponentTypeTraits)
     
     // Position - trivially copyable
     {
-        const auto* desc = registry.GetComponent(Astra::TypeID<Position>::Value());
+        const auto* desc = registry.GetComponentDescriptor(Astra::TypeID<Position>::Value());
         ASSERT_NE(desc, nullptr);
         EXPECT_TRUE(desc->is_trivially_copyable);
         EXPECT_TRUE(desc->is_nothrow_move_constructible);
@@ -89,7 +89,7 @@ TEST_F(ComponentRegistryTest, ComponentTypeTraits)
     
     // Name - non-trivially copyable (has std::string)
     {
-        const auto* desc = registry.GetComponent(Astra::TypeID<Name>::Value());
+        const auto* desc = registry.GetComponentDescriptor(Astra::TypeID<Name>::Value());
         ASSERT_NE(desc, nullptr);
         EXPECT_FALSE(desc->is_trivially_copyable);
         EXPECT_TRUE(desc->is_nothrow_move_constructible);
@@ -98,7 +98,7 @@ TEST_F(ComponentRegistryTest, ComponentTypeTraits)
     
     // Player - empty component
     {
-        const auto* desc = registry.GetComponent(Astra::TypeID<Player>::Value());
+        const auto* desc = registry.GetComponentDescriptor(Astra::TypeID<Player>::Value());
         ASSERT_NE(desc, nullptr);
         EXPECT_TRUE(desc->is_trivially_copyable);
         EXPECT_TRUE(desc->is_empty);
@@ -107,7 +107,7 @@ TEST_F(ComponentRegistryTest, ComponentTypeTraits)
     
     // RenderData - special alignment
     {
-        const auto* desc = registry.GetComponent(Astra::TypeID<RenderData>::Value());
+        const auto* desc = registry.GetComponentDescriptor(Astra::TypeID<RenderData>::Value());
         ASSERT_NE(desc, nullptr);
         EXPECT_EQ(desc->alignment, 32u);
         EXPECT_TRUE(desc->is_trivially_copyable);
@@ -120,7 +120,7 @@ TEST_F(ComponentRegistryTest, ComponentOperations)
     Astra::ComponentRegistry registry;
     registry.RegisterComponent<Health>();
     
-    const auto* desc = registry.GetComponent(Astra::TypeID<Health>::Value());
+    const auto* desc = registry.GetComponentDescriptor(Astra::TypeID<Health>::Value());
     ASSERT_NE(desc, nullptr);
     
     // Test default construction
@@ -166,7 +166,7 @@ TEST_F(ComponentRegistryTest, NonTriviallyCopyableOperations)
     Astra::ComponentRegistry registry;
     registry.RegisterComponent<Name>();
     
-    const auto* desc = registry.GetComponent(Astra::TypeID<Name>::Value());
+    const auto* desc = registry.GetComponentDescriptor(Astra::TypeID<Name>::Value());
     ASSERT_NE(desc, nullptr);
     EXPECT_FALSE(desc->is_trivially_copyable);
     
@@ -209,7 +209,7 @@ TEST_F(ComponentRegistryTest, MoveOnlyComponent)
     Astra::ComponentRegistry registry;
     registry.RegisterComponent<Resource>();
     
-    const auto* desc = registry.GetComponent(Astra::TypeID<Resource>::Value());
+    const auto* desc = registry.GetComponentDescriptor(Astra::TypeID<Resource>::Value());
     ASSERT_NE(desc, nullptr);
     EXPECT_FALSE(desc->is_trivially_copyable);
     EXPECT_FALSE(desc->is_copy_constructible);
@@ -263,7 +263,7 @@ TEST_F(ComponentRegistryTest, EmptyComponent)
     Astra::ComponentRegistry registry;
     registry.RegisterComponent<Player>();
     
-    const auto* desc = registry.GetComponent(Astra::TypeID<Player>::Value());
+    const auto* desc = registry.GetComponentDescriptor(Astra::TypeID<Player>::Value());
     ASSERT_NE(desc, nullptr);
     EXPECT_TRUE(desc->is_empty);
     EXPECT_EQ(desc->size, sizeof(Player));
@@ -281,7 +281,7 @@ TEST_F(ComponentRegistryTest, NonRegisteredComponent)
     Astra::ComponentRegistry registry;
     
     // Try to get a non-registered component
-    const auto* desc = registry.GetComponent(Astra::TypeID<Position>::Value());
+    const auto* desc = registry.GetComponentDescriptor(Astra::TypeID<Position>::Value());
     EXPECT_EQ(desc, nullptr);
 }
 
@@ -308,10 +308,10 @@ TEST_F(ComponentRegistryTest, ManyComponents)
     >();
     
     // Verify all are registered
-    EXPECT_NE(registry.GetComponent(Astra::TypeID<Component1>::Value()), nullptr);
-    EXPECT_NE(registry.GetComponent(Astra::TypeID<Component8>::Value()), nullptr);
-    EXPECT_NE(registry.GetComponent(Astra::TypeID<Position>::Value()), nullptr);
-    EXPECT_NE(registry.GetComponent(Astra::TypeID<Name>::Value()), nullptr);
+    EXPECT_NE(registry.GetComponentDescriptor(Astra::TypeID<Component1>::Value()), nullptr);
+    EXPECT_NE(registry.GetComponentDescriptor(Astra::TypeID<Component8>::Value()), nullptr);
+    EXPECT_NE(registry.GetComponentDescriptor(Astra::TypeID<Position>::Value()), nullptr);
+    EXPECT_NE(registry.GetComponentDescriptor(Astra::TypeID<Name>::Value()), nullptr);
 }
 
 // Test component with arrays
@@ -327,7 +327,7 @@ TEST_F(ComponentRegistryTest, ComponentWithArrays)
     Astra::ComponentRegistry registry;
     registry.RegisterComponent<Transform>();
     
-    const auto* desc = registry.GetComponent(Astra::TypeID<Transform>::Value());
+    const auto* desc = registry.GetComponentDescriptor(Astra::TypeID<Transform>::Value());
     ASSERT_NE(desc, nullptr);
     EXPECT_EQ(desc->size, sizeof(Transform));
     EXPECT_TRUE(desc->is_trivially_copyable);
@@ -366,12 +366,12 @@ TEST_F(ComponentRegistryTest, ComponentIDConsistency)
     registry2.RegisterComponents<Health, Position, Velocity>();
     
     // IDs should be the same regardless of registration order
-    auto posID1 = registry1.GetComponent(Astra::TypeID<Position>::Value())->id;
-    auto posID2 = registry2.GetComponent(Astra::TypeID<Position>::Value())->id;
+    auto posID1 = registry1.GetComponentDescriptor(Astra::TypeID<Position>::Value())->id;
+    auto posID2 = registry2.GetComponentDescriptor(Astra::TypeID<Position>::Value())->id;
     EXPECT_EQ(posID1, posID2);
     
-    auto velID1 = registry1.GetComponent(Astra::TypeID<Velocity>::Value())->id;
-    auto velID2 = registry2.GetComponent(Astra::TypeID<Velocity>::Value())->id;
+    auto velID1 = registry1.GetComponentDescriptor(Astra::TypeID<Velocity>::Value())->id;
+    auto velID2 = registry2.GetComponentDescriptor(Astra::TypeID<Velocity>::Value())->id;
     EXPECT_EQ(velID1, velID2);
 }
 
@@ -386,7 +386,7 @@ TEST_F(ComponentRegistryTest, FunctionPointerValidity)
                      Astra::TypeID<Name>::Value(),
                      Astra::TypeID<Resource>::Value()})
     {
-        const auto* desc = registry.GetComponent(id);
+        const auto* desc = registry.GetComponentDescriptor(id);
         ASSERT_NE(desc, nullptr);
         EXPECT_NE(desc->defaultConstruct, nullptr);
         EXPECT_NE(desc->destruct, nullptr);
@@ -433,7 +433,7 @@ TEST_F(ComponentRegistryTest, EmptyRegisterComponents)
     
     // Registry should still work
     registry.RegisterComponent<Position>();
-    EXPECT_NE(registry.GetComponent(Astra::TypeID<Position>::Value()), nullptr);
+    EXPECT_NE(registry.GetComponentDescriptor(Astra::TypeID<Position>::Value()), nullptr);
 }
 
 // Test component with union
@@ -455,7 +455,7 @@ TEST_F(ComponentRegistryTest, ComponentWithUnion)
     Astra::ComponentRegistry registry;
     registry.RegisterComponent<ComponentWithUnion>();
     
-    const auto* desc = registry.GetComponent(Astra::TypeID<ComponentWithUnion>::Value());
+    const auto* desc = registry.GetComponentDescriptor(Astra::TypeID<ComponentWithUnion>::Value());
     ASSERT_NE(desc, nullptr);
     EXPECT_EQ(desc->size, sizeof(ComponentWithUnion));
     EXPECT_TRUE(desc->is_trivially_copyable);
@@ -487,8 +487,8 @@ TEST_F(ComponentRegistryTest, RegistrationIdempotency)
     }
     
     // Verify all are registered
-    EXPECT_NE(registry.GetComponent(Astra::TypeID<TestComp1>::Value()), nullptr);
-    EXPECT_NE(registry.GetComponent(Astra::TypeID<TestComp10>::Value()), nullptr);
+    EXPECT_NE(registry.GetComponentDescriptor(Astra::TypeID<TestComp1>::Value()), nullptr);
+    EXPECT_NE(registry.GetComponentDescriptor(Astra::TypeID<TestComp10>::Value()), nullptr);
 }
 
 // Test serialization metadata
@@ -500,7 +500,7 @@ TEST_F(ComponentRegistryTest, SerializationMetadata)
     registry.RegisterComponent<Position>();
     
     Astra::ComponentID id = Astra::TypeID<Position>::Value();
-    const Astra::ComponentDescriptor* desc = registry.GetComponent(id);
+    const Astra::ComponentDescriptor* desc = registry.GetComponentDescriptor(id);
     
     ASSERT_NE(desc, nullptr);
     
@@ -517,11 +517,11 @@ TEST_F(ComponentRegistryTest, SerializationMetadata)
     EXPECT_NE(desc->deserializeVersioned, nullptr);
     
     // Check hash lookup
-    const Astra::ComponentDescriptor* descByHash = registry.GetComponentByHash(desc->hash);
+    const Astra::ComponentDescriptor* descByHash = registry.GetComponentDescriptorByHash(desc->hash);
     EXPECT_EQ(descByHash, desc);
     
     // Check ID from hash
-    auto idResult = registry.GetComponentIdFromHash(desc->hash);
+    auto idResult = registry.GetComponentIDFromHash(desc->hash);
     EXPECT_TRUE(idResult.IsOk());
     EXPECT_EQ(*idResult.GetValue(), id);
 }
@@ -532,7 +532,7 @@ TEST_F(ComponentRegistryTest, SerializationFunctions)
     Astra::ComponentRegistry registry;
     registry.RegisterComponent<Health>();
     
-    const auto* desc = registry.GetComponent(Astra::TypeID<Health>::Value());
+    const auto* desc = registry.GetComponentDescriptor(Astra::TypeID<Health>::Value());
     ASSERT_NE(desc, nullptr);
     
     // Create a health component
@@ -586,7 +586,7 @@ TEST_F(ComponentRegistryTest, MultipleComponentSerialization)
                      Astra::TypeID<Health>::Value(),
                      Astra::TypeID<Name>::Value()})
     {
-        const auto* desc = registry.GetComponent(id);
+        const auto* desc = registry.GetComponentDescriptor(id);
         ASSERT_NE(desc, nullptr);
         
         EXPECT_NE(desc->hash, 0u);
@@ -598,12 +598,12 @@ TEST_F(ComponentRegistryTest, MultipleComponentSerialization)
     }
     
     // Verify hash lookups work
-    EXPECT_NE(registry.GetComponentByHash(Astra::TypeID<Position>::Hash()), nullptr);
-    EXPECT_NE(registry.GetComponentByHash(Astra::TypeID<Name>::Hash()), nullptr);
+    EXPECT_NE(registry.GetComponentDescriptorByHash(Astra::TypeID<Position>::Hash()), nullptr);
+    EXPECT_NE(registry.GetComponentDescriptorByHash(Astra::TypeID<Name>::Hash()), nullptr);
     
     // Test unknown hash
-    EXPECT_EQ(registry.GetComponentByHash(0xDEADBEEF), nullptr);
-    auto badResult = registry.GetComponentIdFromHash(0xDEADBEEF);
+    EXPECT_EQ(registry.GetComponentDescriptorByHash(0xDEADBEEF), nullptr);
+    auto badResult = registry.GetComponentIDFromHash(0xDEADBEEF);
     EXPECT_TRUE(badResult.IsErr());
 }
 
@@ -612,13 +612,13 @@ TEST_F(ComponentRegistryTest, ComponentEnumeration)
 {
     Astra::ComponentRegistry registry;
     
-    EXPECT_EQ(registry.GetComponentCount(), 0u);
+    EXPECT_EQ(registry.Size(), 0u);
     
     registry.RegisterComponents<Position, Velocity, Health>();
     
-    EXPECT_EQ(registry.GetComponentCount(), 3u);
+    EXPECT_EQ(registry.Size(), 3u);
     
-    const auto& allComponents = registry.GetAllComponents();
+    const auto& allComponents = registry.GetAllComponentIDs();
     EXPECT_EQ(allComponents.Size(), 3u);
     
     // Verify each component is in the map

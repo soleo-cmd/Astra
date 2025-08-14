@@ -61,10 +61,10 @@ TEST_F(RelationsTest, UnfilteredRelations)
 // Test filtered Relations with required components
 TEST_F(RelationsTest, FilteredRelationsRequired)
 {
-    Entity parent = registry->CreateEntity(Position{0, 0, 0});
-    Entity child1 = registry->CreateEntity(Position{1, 0, 0}, Velocity{1, 0, 0});
-    Entity child2 = registry->CreateEntity(Position{2, 0, 0});
-    Entity child3 = registry->CreateEntity(Velocity{3, 0, 0}); // No Position
+    Entity parent = registry->CreateEntityWith(Position{0, 0, 0});
+    Entity child1 = registry->CreateEntityWith(Position{1, 0, 0}, Velocity{1, 0, 0});
+    Entity child2 = registry->CreateEntityWith(Position{2, 0, 0});
+    Entity child3 = registry->CreateEntityWith(Velocity{3, 0, 0}); // No Position
     
     // Set up relationships
     registry->SetParent(child1, parent);
@@ -89,9 +89,9 @@ TEST_F(RelationsTest, FilteredRelationsRequired)
 TEST_F(RelationsTest, FilteredRelationsNot)
 {
     Entity parent = registry->CreateEntity();
-    Entity child1 = registry->CreateEntity(Position{1, 0, 0}, Enemy{});
-    Entity child2 = registry->CreateEntity(Position{2, 0, 0});
-    Entity child3 = registry->CreateEntity(Enemy{});
+    Entity child1 = registry->CreateEntityWith(Position{1, 0, 0}, Enemy{});
+    Entity child2 = registry->CreateEntityWith(Position{2, 0, 0});
+    Entity child3 = registry->CreateEntity<Enemy>();
     
     registry->SetParent(child1, parent);
     registry->SetParent(child2, parent);
@@ -115,10 +115,10 @@ TEST_F(RelationsTest, FilteredRelationsNot)
 TEST_F(RelationsTest, FilteredRelationsAny)
 {
     Entity parent = registry->CreateEntity();
-    Entity child1 = registry->CreateEntity(Player{});
-    Entity child2 = registry->CreateEntity(Enemy{});
-    Entity child3 = registry->CreateEntity(Position{});  // Neither Player nor Enemy
-    Entity child4 = registry->CreateEntity(Player{}, Enemy{}); // Both
+    Entity child1 = registry->CreateEntity<Player>();
+    Entity child2 = registry->CreateEntity<Enemy>();
+    Entity child3 = registry->CreateEntity<Position>();  // Neither Player nor Enemy
+    Entity child4 = registry->CreateEntity<Player, Enemy>(); // Both
     
     registry->SetParent(child1, parent);
     registry->SetParent(child2, parent);
@@ -145,10 +145,10 @@ TEST_F(RelationsTest, FilteredRelationsAny)
 TEST_F(RelationsTest, FilteredRelationsOneOf)
 {
     Entity parent = registry->CreateEntity();
-    Entity child1 = registry->CreateEntity(Player{});
-    Entity child2 = registry->CreateEntity(Enemy{});
-    Entity child3 = registry->CreateEntity(Position{});  // Neither
-    Entity child4 = registry->CreateEntity(Player{}, Enemy{}); // Both (should be excluded)
+    Entity child1 = registry->CreateEntity<Player>();
+    Entity child2 = registry->CreateEntity<Enemy>();
+    Entity child3 = registry->CreateEntity<Position>();  // Neither
+    Entity child4 = registry->CreateEntity<Player, Enemy>(); // Both (should be excluded)
     
     registry->SetParent(child1, parent);
     registry->SetParent(child2, parent);
@@ -174,10 +174,10 @@ TEST_F(RelationsTest, FilteredRelationsOneOf)
 // Test links with filtering
 TEST_F(RelationsTest, FilteredLinks)
 {
-    Entity entity1 = registry->CreateEntity(Position{1, 0, 0});
-    Entity entity2 = registry->CreateEntity(Position{2, 0, 0}, Enemy{});
-    Entity entity3 = registry->CreateEntity(Enemy{});
-    Entity entity4 = registry->CreateEntity(Position{4, 0, 0});
+    Entity entity1 = registry->CreateEntityWith(Position{1, 0, 0});
+    Entity entity2 = registry->CreateEntityWith(Position{2, 0, 0}, Enemy{});
+    Entity entity3 = registry->CreateEntity<Enemy>();
+    Entity entity4 = registry->CreateEntityWith(Position{4, 0, 0});
     
     // Create links
     registry->AddLink(entity1, entity2);
@@ -214,8 +214,8 @@ TEST_F(RelationsTest, FilteredLinks)
 // Test parent filtering
 TEST_F(RelationsTest, FilteredParent)
 {
-    Entity parent1 = registry->CreateEntity(Position{0, 0, 0});
-    Entity parent2 = registry->CreateEntity(Enemy{});
+    Entity parent1 = registry->CreateEntity<Position>();
+    Entity parent2 = registry->CreateEntity<Enemy>();
     Entity child1 = registry->CreateEntity();
     Entity child2 = registry->CreateEntity();
     
@@ -248,11 +248,11 @@ TEST_F(RelationsTest, DescendantsTraversal)
     //   |       |
     // grand1  grand2
     
-    Entity root = registry->CreateEntity(Position{0, 0, 0});
-    Entity child1 = registry->CreateEntity(Position{1, 0, 0});
-    Entity child2 = registry->CreateEntity(Position{2, 0, 0});
-    Entity grand1 = registry->CreateEntity(Position{1, 1, 0});
-    Entity grand2 = registry->CreateEntity(Position{2, 1, 0});
+    Entity root = registry->CreateEntityWith(Position{0, 0, 0});
+    Entity child1 = registry->CreateEntityWith(Position{1, 0, 0});
+    Entity child2 = registry->CreateEntityWith(Position{2, 0, 0});
+    Entity grand1 = registry->CreateEntityWith(Position{1, 1, 0});
+    Entity grand2 = registry->CreateEntityWith(Position{2, 1, 0});
     
     registry->SetParent(child1, root);
     registry->SetParent(child2, root);
@@ -291,10 +291,10 @@ TEST_F(RelationsTest, DescendantsTraversal)
 TEST_F(RelationsTest, FilteredDescendants)
 {
     Entity root = registry->CreateEntity();
-    Entity child1 = registry->CreateEntity(Position{1, 0, 0});
-    Entity child2 = registry->CreateEntity(Enemy{});
-    Entity grand1 = registry->CreateEntity(Position{1, 1, 0});
-    Entity grand2 = registry->CreateEntity(Position{2, 1, 0}, Enemy{});
+    Entity child1 = registry->CreateEntityWith(Position{1, 0, 0});
+    Entity child2 = registry->CreateEntity<Enemy>();
+    Entity grand1 = registry->CreateEntityWith(Position{1, 1, 0});
+    Entity grand2 = registry->CreateEntityWith(Position{2, 1, 0}, Enemy{});
     
     registry->SetParent(child1, root);
     registry->SetParent(child2, root);
@@ -319,9 +319,9 @@ TEST_F(RelationsTest, FilteredDescendants)
 // Test ancestors traversal
 TEST_F(RelationsTest, AncestorsTraversal)
 {
-    Entity root = registry->CreateEntity(Position{0, 0, 0});
-    Entity parent = registry->CreateEntity(Position{1, 0, 0});
-    Entity child = registry->CreateEntity(Position{2, 0, 0});
+    Entity root = registry->CreateEntityWith(Position{0, 0, 0});
+    Entity parent = registry->CreateEntityWith(Position{1, 0, 0});
+    Entity child = registry->CreateEntityWith(Position{2, 0, 0});
     
     registry->SetParent(parent, root);
     registry->SetParent(child, parent);
@@ -350,8 +350,8 @@ TEST_F(RelationsTest, AncestorsTraversal)
 // Test ancestors with filtering
 TEST_F(RelationsTest, FilteredAncestors)
 {
-    Entity root = registry->CreateEntity(Enemy{});
-    Entity parent = registry->CreateEntity(Position{1, 0, 0});
+    Entity root = registry->CreateEntity<Enemy>();
+    Entity parent = registry->CreateEntityWith(Position{1, 0, 0});
     Entity child = registry->CreateEntity();
     
     registry->SetParent(parent, root);
@@ -376,11 +376,11 @@ TEST_F(RelationsTest, ComplexFiltering)
     Entity root = registry->CreateEntity();
     
     // Create children with various component combinations
-    Entity child1 = registry->CreateEntity(Position{}, Player{});
-    Entity child2 = registry->CreateEntity(Position{}, Enemy{});
-    Entity child3 = registry->CreateEntity(Position{}, Health{});
-    Entity child4 = registry->CreateEntity(Player{}, Health{});
-    Entity child5 = registry->CreateEntity(Enemy{}, Health{});
+    Entity child1 = registry->CreateEntityWith(Position{}, Player{});
+    Entity child2 = registry->CreateEntityWith(Position{}, Enemy{});
+    Entity child3 = registry->CreateEntityWith(Position{}, Health{});
+    Entity child4 = registry->CreateEntity<Player, Health>();
+    Entity child5 = registry->CreateEntity<Enemy, Health>();
     
     registry->SetParent(child1, root);
     registry->SetParent(child2, root);
@@ -414,8 +414,8 @@ TEST_F(RelationsTest, ComplexFiltering)
 TEST_F(RelationsTest, EmptyFilterResults)
 {
     Entity parent = registry->CreateEntity();
-    Entity child1 = registry->CreateEntity(Position{});
-    Entity child2 = registry->CreateEntity(Velocity{});
+    Entity child1 = registry->CreateEntity<Position>();
+    Entity child2 = registry->CreateEntity<Velocity>();
     
     registry->SetParent(child1, parent);
     registry->SetParent(child2, parent);
@@ -427,7 +427,7 @@ TEST_F(RelationsTest, EmptyFilterResults)
     EXPECT_TRUE(children.empty());
     
     // Links when no entities match filter
-    Entity other = registry->CreateEntity(Enemy{});
+    Entity other = registry->CreateEntity<Enemy>();
     registry->AddLink(parent, other);
     
     auto linksRelations = registry->GetRelations<Player>(parent);
@@ -439,9 +439,9 @@ TEST_F(RelationsTest, EmptyFilterResults)
 // Test bidirectional link filtering
 TEST_F(RelationsTest, BidirectionalLinkFiltering)
 {
-    Entity entity1 = registry->CreateEntity(Position{}, Player{});
-    Entity entity2 = registry->CreateEntity(Position{}, Enemy{});
-    Entity entity3 = registry->CreateEntity(Health{});
+    Entity entity1 = registry->CreateEntityWith(Position{}, Player{});
+    Entity entity2 = registry->CreateEntityWith(Position{}, Enemy{});
+    Entity entity3 = registry->CreateEntityWith(Health{});
     
     registry->AddLink(entity1, entity2);
     registry->AddLink(entity1, entity3);
@@ -475,7 +475,7 @@ TEST_F(RelationsTest, BidirectionalLinkFiltering)
 TEST_F(RelationsTest, LargeHierarchyPerformance)
 {
     // Create a deep hierarchy
-    Entity root = registry->CreateEntity(Position{0, 0, 0});
+    Entity root = registry->CreateEntityWith(Position{0, 0, 0});
     Entity current = root;
     
     const size_t depth = 100;
@@ -484,7 +484,7 @@ TEST_F(RelationsTest, LargeHierarchyPerformance)
     
     for (size_t i = 1; i < depth; ++i)
     {
-        Entity child = registry->CreateEntity(Position{float(i), 0, 0});
+        Entity child = registry->CreateEntityWith(Position{float(i), 0, 0});
         registry->SetParent(child, current);
         entities.push_back(child);
         current = child;

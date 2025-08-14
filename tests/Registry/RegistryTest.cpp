@@ -57,7 +57,7 @@ TEST_F(RegistryTest, CreateEntityWithComponents)
     using namespace Astra::Test;
     
     // Create entity with components
-    Astra::Entity entity = registry->CreateEntity(
+    Astra::Entity entity = registry->CreateEntityWith(
         Position{10.0f, 20.0f, 30.0f},
         Velocity{1.0f, 2.0f, 3.0f},
         Health{75, 100}
@@ -92,7 +92,7 @@ TEST_F(RegistryTest, BatchEntityCreation)
     const size_t count = 100;
     std::vector<Astra::Entity> entities(count);
     
-    registry->CreateEntities<Position, Velocity>(
+    registry->CreateEntitiesWith<Position, Velocity>(
         count, entities,
         [](size_t i) {
             return std::make_tuple(
@@ -152,17 +152,23 @@ TEST_F(RegistryTest, ComponentOperations)
     Astra::Entity entity = registry->CreateEntity();
     
     // Add Position component
-    Position* pos = registry->AddComponent<Position>(entity, 1.0f, 2.0f, 3.0f);
+    registry->AddComponent<Position>(entity, 1.0f, 2.0f, 3.0f);
+    
+    // Get component to verify it was added
+    Position* pos = registry->GetComponent<Position>(entity);
     ASSERT_NE(pos, nullptr);
     EXPECT_EQ(pos->x, 1.0f);
     
-    // Get component
+    // Get component again - should be same
     Position* retrieved = registry->GetComponent<Position>(entity);
     ASSERT_NE(retrieved, nullptr);
     EXPECT_EQ(retrieved, pos);
     
     // Add another component
-    Velocity* vel = registry->AddComponent<Velocity>(entity, 10.0f, 20.0f, 30.0f);
+    registry->AddComponent<Velocity>(entity, 10.0f, 20.0f, 30.0f);
+    
+    // Verify it was added
+    Velocity* vel = registry->GetComponent<Velocity>(entity);
     ASSERT_NE(vel, nullptr);
     
     // Both components should exist
@@ -188,11 +194,11 @@ TEST_F(RegistryTest, ViewCreationAndIteration)
     {
         if (i % 2 == 0)
         {
-            registry->CreateEntity(Position{float(i), 0.0f, 0.0f}, Velocity{1.0f, 0.0f, 0.0f});
+            registry->CreateEntityWith(Position{float(i), 0.0f, 0.0f}, Velocity{1.0f, 0.0f, 0.0f});
         }
         else
         {
-            registry->CreateEntity(Position{float(i), 0.0f, 0.0f});
+            registry->CreateEntityWith(Position{float(i), 0.0f, 0.0f});
         }
     }
     
@@ -226,7 +232,7 @@ TEST_F(RegistryTest, ClearRegistry)
     // Create entities with components
     for (int i = 0; i < 20; ++i)
     {
-        registry->CreateEntity(Position{float(i), 0.0f, 0.0f});
+        registry->CreateEntityWith(Position{float(i), 0.0f, 0.0f});
     }
     
     EXPECT_EQ(registry->Size(), 20u);
@@ -406,7 +412,7 @@ TEST_F(RegistryTest, SignalSystem)
     EXPECT_EQ(componentAddedCount, 1);
     
     // Create entity with components (should trigger both)
-    registry->CreateEntity(Position{}, Velocity{});
+    registry->CreateEntityWith(Position{}, Velocity{});
     EXPECT_EQ(entityCreatedCount, 2);
     EXPECT_EQ(componentAddedCount, 3); // Position and Velocity
     
@@ -437,8 +443,8 @@ TEST_F(RegistryTest, SharedComponentRegistry)
     
     for (int i = 0; i < 10; ++i)
     {
-        entities1.push_back(registry1.CreateEntity(Position{float(i), 0.0f, 0.0f}));
-        entities2.push_back(registry2.CreateEntity(Position{float(i + 100), 0.0f, 0.0f}));
+        entities1.push_back(registry1.CreateEntityWith(Position{float(i), 0.0f, 0.0f}));
+        entities2.push_back(registry2.CreateEntityWith(Position{float(i + 100), 0.0f, 0.0f}));
     }
     
     // Verify both registries work independently
@@ -474,8 +480,8 @@ TEST_F(RegistryTest, ComponentRegistrySharing)
     Astra::Registry registry2(sharedRegistry);
     
     // Components should work in both registries
-    Astra::Entity e1 = registry->CreateEntity(Position{1.0f, 2.0f, 3.0f});
-    Astra::Entity e2 = registry2.CreateEntity(Position{4.0f, 5.0f, 6.0f});
+    Astra::Entity e1 = registry->CreateEntityWith(Position{1.0f, 2.0f, 3.0f});
+    Astra::Entity e2 = registry2.CreateEntityWith(Position{4.0f, 5.0f, 6.0f});
     
     Position* pos1 = registry->GetComponent<Position>(e1);
     ASSERT_NE(pos1, nullptr);
@@ -496,7 +502,11 @@ TEST_F(RegistryTest, InvalidEntityOperations)
     // Operations on invalid entity should fail gracefully
     EXPECT_FALSE(registry->IsValid(invalidEntity));
     EXPECT_EQ(registry->GetComponent<Position>(invalidEntity), nullptr);
-    EXPECT_EQ(registry->AddComponent<Position>(invalidEntity), nullptr);
+    
+    // AddComponent now returns void, verify it doesn't add to invalid entity
+    registry->AddComponent<Position>(invalidEntity);
+    EXPECT_EQ(registry->GetComponent<Position>(invalidEntity), nullptr);
+    
     EXPECT_FALSE(registry->RemoveComponent<Position>(invalidEntity));
     
     // Destroying invalid entity should not crash
@@ -537,7 +547,7 @@ TEST_F(RegistryTest, CopyConstructor)
     EXPECT_EQ(copy.GetComponentRegistry(), registry->GetComponentRegistry());
     
     // Should be able to create entities with registered components
-    Astra::Entity entity = copy.CreateEntity(Position{1.0f, 2.0f, 3.0f});
+    Astra::Entity entity = copy.CreateEntityWith(Position{1.0f, 2.0f, 3.0f});
     EXPECT_TRUE(copy.IsValid(entity));
     
     Position* pos = copy.GetComponent<Position>(entity);
@@ -555,7 +565,7 @@ TEST_F(RegistryTest, BatchOperationsPerformance)
     
     // Test batch entity creation
     auto start = std::chrono::high_resolution_clock::now();
-    registry->CreateEntities<Position, Velocity>(batchSize, entities, 
+    registry->CreateEntitiesWith<Position, Velocity>(batchSize, entities, 
         [](size_t i)
         {
             return std::make_tuple(Position{float(i), float(i * 2), float(i * 3)}, Velocity{float(i * 10), 0.0f, 0.0f});
@@ -600,7 +610,7 @@ TEST_F(RegistryTest, SingleEntitySerialization)
     using namespace Astra::Test;
     
     // Create entity with components
-    Astra::Entity entity = registry->CreateEntity<Position, Velocity>(
+    Astra::Entity entity = registry->CreateEntityWith(
         Position{1.0f, 2.0f, 3.0f},
         Velocity{4.0f, 5.0f, 6.0f}
     );
@@ -648,7 +658,7 @@ TEST_F(RegistryTest, MultipleEntitiesSerialization)
     // 10 entities with Position only
     for (int i = 0; i < 10; ++i)
     {
-        entities.push_back(registry->CreateEntity<Position>(
+        entities.push_back(registry->CreateEntityWith(
             Position{float(i), float(i * 2), float(i * 3)}
         ));
     }
@@ -656,7 +666,7 @@ TEST_F(RegistryTest, MultipleEntitiesSerialization)
     // 10 entities with Position and Velocity
     for (int i = 0; i < 10; ++i)
     {
-        entities.push_back(registry->CreateEntity<Position, Velocity>(
+        entities.push_back(registry->CreateEntityWith(
             Position{float(i + 10), float(i * 2 + 10), float(i * 3 + 10)},
             Velocity{float(i), 0.0f, 0.0f}
         ));
@@ -665,7 +675,7 @@ TEST_F(RegistryTest, MultipleEntitiesSerialization)
     // 10 entities with Position, Velocity, and Health
     for (int i = 0; i < 10; ++i)
     {
-        entities.push_back(registry->CreateEntity<Position, Velocity, Health>(
+        entities.push_back(registry->CreateEntityWith(
             Position{float(i + 20), float(i * 2 + 20), float(i * 3 + 20)},
             Velocity{float(i + 10), 0.0f, 0.0f},
             Health{100 - i, 100}
@@ -736,11 +746,11 @@ TEST_F(RegistryTest, RelationshipSerialization)
     using namespace Astra::Test;
     
     // Create parent and children
-    Astra::Entity parent = registry->CreateEntity<Position>(Position{0, 0, 0});
-    Astra::Entity child1 = registry->CreateEntity<Position>(Position{1, 0, 0});
-    Astra::Entity child2 = registry->CreateEntity<Position>(Position{2, 0, 0});
-    Astra::Entity linked1 = registry->CreateEntity<Position>(Position{3, 0, 0});
-    Astra::Entity linked2 = registry->CreateEntity<Position>(Position{4, 0, 0});
+    Astra::Entity parent = registry->CreateEntityWith(Position{0, 0, 0});
+    Astra::Entity child1 = registry->CreateEntityWith(Position{1, 0, 0});
+    Astra::Entity child2 = registry->CreateEntityWith(Position{2, 0, 0});
+    Astra::Entity linked1 = registry->CreateEntityWith(Position{3, 0, 0});
+    Astra::Entity linked2 = registry->CreateEntityWith(Position{4, 0, 0});
     
     // Set up relationships
     registry->SetParent(child1, parent);
@@ -781,7 +791,7 @@ TEST_F(RegistryTest, SerializationErrorHandling)
     // Test loading with missing components
     {
         // Create entity with Position and Velocity
-        registry->CreateEntity<Position, Velocity>(
+        registry->CreateEntityWith(
             Position{1.0f, 2.0f, 3.0f},
             Velocity{4.0f, 5.0f, 6.0f}
         );

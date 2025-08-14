@@ -16,8 +16,7 @@
 #include "Core/Signal.hpp"
 
 // Memory management
-#include "Memory/Memory.hpp"
-#include "Memory/ChunkPool.hpp"
+#include "Core/Memory.hpp"
 
 // Container types
 #include "Container/AlignedStorage.hpp"
@@ -31,11 +30,9 @@
 
 // Component system
 #include "Component/Component.hpp"
-#include "Component/ComponentOps.hpp"
 #include "Component/ComponentRegistry.hpp"
 
 // Archetype system
-#include "Archetype/ArchetypeEdgeStorage.hpp"
 #include "Archetype/Archetype.hpp"
 #include "Archetype/ArchetypeStorage.hpp"
 

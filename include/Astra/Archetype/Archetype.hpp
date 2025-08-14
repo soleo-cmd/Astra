@@ -21,57 +21,46 @@
 #include <vector>
 
 #include "../Component/Component.hpp"
-#include "../Component/ComponentOps.hpp"
 #include "../Container/Bitmap.hpp"
+#include "../Container/FlatMap.hpp"
 #include "../Container/SmallVector.hpp"
 #include "../Core/Base.hpp"
+#include "../Core/Memory.hpp"
 #include "../Core/Result.hpp"
 #include "../Core/TypeID.hpp"
 #include "../Entity/Entity.hpp"
-#include "../Memory/ChunkPool.hpp"
-#include "../Memory/Memory.hpp"
 #include "../Platform/Hardware.hpp"
 #include "../Platform/Platform.hpp"
 #include "../Platform/Simd.hpp"
 #include "../Serialization/BinaryReader.hpp"
 #include "../Serialization/BinaryWriter.hpp"
-#include "ArchetypeEdgeStorage.hpp"
+#include "ArchetypeChunkPool.hpp"
 
 namespace Astra
 {
-    class ArchetypeStorage;
-
-    using ComponentMask = Bitmap<MAX_COMPONENTS>;
-    
-    /**
-     * PackedLocation - Simple struct for chunk/entity indices
-     * 
-     * Direct storage of chunk and entity indices for O(1) lookups.
-     * Modern CPUs handle two 32-bit loads faster than bit operations.
-     */
-    struct PackedLocation
+    struct EntityLocation
     {
         uint32_t chunkIndex;
         uint32_t entityIndex;
         
-        constexpr PackedLocation() noexcept :
+        constexpr EntityLocation() noexcept :
             chunkIndex(std::numeric_limits<uint32_t>::max()),
             entityIndex(std::numeric_limits<uint32_t>::max())
         {}
         
-        constexpr PackedLocation(uint32_t chunk, uint32_t entity) noexcept : chunkIndex(chunk), entityIndex(entity) {}
+        constexpr EntityLocation(uint32_t chunk, uint32_t entity) noexcept : chunkIndex(chunk), entityIndex(entity) {}
         
-        ASTRA_NODISCARD constexpr static PackedLocation Pack(size_t chunkIdx, size_t entityIdx, size_t) noexcept
+        ASTRA_NODISCARD constexpr static EntityLocation Create(size_t chunkIdx, size_t entityIdx) noexcept
         {
-            return PackedLocation(static_cast<uint32_t>(chunkIdx), static_cast<uint32_t>(entityIdx));
+            return EntityLocation(static_cast<uint32_t>(chunkIdx), static_cast<uint32_t>(entityIdx));
         }
         
-        ASTRA_NODISCARD constexpr size_t GetChunkIndex(size_t) const noexcept
+        ASTRA_NODISCARD constexpr size_t GetChunkIndex() const noexcept
         {
             return chunkIndex;
         }
         
-        ASTRA_NODISCARD constexpr size_t GetEntityIndex(size_t) const noexcept
+        ASTRA_NODISCARD constexpr size_t GetEntityIndex() const noexcept
         {
             return entityIndex;
         }
@@ -81,37 +70,37 @@ namespace Astra
             return chunkIndex != std::numeric_limits<uint32_t>::max();
         }
         
-        ASTRA_NODISCARD constexpr size_t Raw() const noexcept 
-        { 
-            return (static_cast<size_t>(chunkIndex) << 32) | entityIndex; 
-        }
-        
-        constexpr bool operator==(const PackedLocation& other) const noexcept 
+        constexpr bool operator==(const EntityLocation& other) const noexcept 
         { 
             return chunkIndex == other.chunkIndex && entityIndex == other.entityIndex; 
         }
-        constexpr bool operator!=(const PackedLocation& other) const noexcept 
+        constexpr bool operator!=(const EntityLocation& other) const noexcept 
         { 
             return !(*this == other); 
         }
-        constexpr bool operator<(const PackedLocation& other) const noexcept 
+        constexpr bool operator<(const EntityLocation& other) const noexcept 
         { 
             return chunkIndex < other.chunkIndex || (chunkIndex == other.chunkIndex && entityIndex < other.entityIndex); 
         }
-        constexpr bool operator>(const PackedLocation& other) const noexcept 
+        constexpr bool operator>(const EntityLocation& other) const noexcept 
         { 
             return other < *this; 
         }
-        constexpr bool operator<=(const PackedLocation& other) const noexcept 
+        constexpr bool operator<=(const EntityLocation& other) const noexcept 
         { 
             return !(other < *this); 
         }
-        constexpr bool operator>=(const PackedLocation& other) const noexcept 
+        constexpr bool operator>=(const EntityLocation& other) const noexcept 
         { 
             return !(*this < other); 
         }
     };
     
+    class ArchetypeStorage;
+
+    using ArchetypeChunk = ArchetypeChunkPool::Chunk;
+    using ComponentMask = Bitmap<MAX_COMPONENTS>;
+
     template<Component... Components>
     ASTRA_NODISCARD constexpr ComponentMask MakeComponentMask() noexcept
     {
@@ -122,8 +111,6 @@ namespace Astra
     
     class Archetype
     {
-        class Chunk;
-        struct ChunkDeleter;
     
     public:
         // Chunk utilization metrics for coalescing
@@ -136,7 +123,7 @@ namespace Astra
         
         explicit Archetype(ComponentMask mask) :
             m_mask(mask),
-            m_componentCount(mask.Count()), // Cache component count
+            m_componentCount(mask.Count()),
             m_entityCount(0),
             m_entitiesPerChunk(0),
             m_entitiesPerChunkShift(0),
@@ -170,7 +157,7 @@ namespace Astra
             
             // Calculate how many entities fit after accounting for alignment overhead
             // Get chunk size from the pool
-            size_t chunkSize = m_chunkPool ? m_chunkPool->GetChunkSize() : ChunkPool::DEFAULT_CHUNK_SIZE;
+            size_t chunkSize = m_chunkPool ? m_chunkPool->GetChunkSize() : ArchetypeChunkPool::DEFAULT_CHUNK_SIZE;
             size_t remainingSpace = chunkSize - totalOffset;
             size_t maxEntities = perEntitySize > 0 ? remainingSpace / perEntitySize : 256;
             
@@ -191,7 +178,7 @@ namespace Astra
             m_initialized = true;
             
             // Pre-allocate first chunk for any archetype (even empty ones need to store entities)
-            auto chunk = Chunk::Create(m_entitiesPerChunk, m_componentDescriptors, AcquireChunkMemory(), m_chunkPool);
+            auto chunk = m_chunkPool->CreateChunk(m_entitiesPerChunk, m_componentDescriptors);
             if (!chunk) ASTRA_UNLIKELY
             {
                 // Mark as failed initialization - caller must check IsInitialized()
@@ -204,15 +191,15 @@ namespace Astra
         
         /**
          * Add entity to archetype
-         * @return Packed location or invalid location on failure
+         * @return Entity location or invalid location on failure
          */
-        PackedLocation AddEntity(Entity entity)
+        EntityLocation AddEntity(Entity entity)
         {
             // Find or create a chunk with space
             auto [chunkIdx, wasCreated] = FindOrCreateChunkWithSpace();
             if (chunkIdx == INVALID_CHUNK_INDEX) ASTRA_UNLIKELY
             {
-                return PackedLocation();  // Allocation failed
+                return EntityLocation();  // Allocation failed
             }
 
             size_t entityIdx = m_chunks[chunkIdx]->AddEntity(entity);
@@ -225,22 +212,17 @@ namespace Astra
                 m_firstNonFullChunkIdx = chunkIdx + 1;
             }
 
-            // Return packed location
-            return PackedLocation::Pack(chunkIdx, entityIdx, m_entitiesPerChunkShift);
+            return EntityLocation::Create(chunkIdx, entityIdx);
         }
 
-        /**
-         * Optimized batch add entities with pre-allocation
-         * Returns vector of packed locations for added entities
-         */
-        std::vector<PackedLocation> AddEntities(std::span<const Entity> entities)
+        std::vector<EntityLocation> AddEntities(std::span<const Entity> entities)
         {
             size_t count = entities.size();
             if (count == 0) ASTRA_UNLIKELY
                 return {};
             
-            std::vector<PackedLocation> packedLocations;
-            packedLocations.reserve(count);
+            std::vector<EntityLocation> locations;
+            locations.reserve(count);
             
             // Calculate and allocate needed chunks upfront
             size_t remainingCapacity = CalculateRemainingCapacity();
@@ -249,48 +231,20 @@ namespace Astra
                 size_t additionalNeeded = count - remainingCapacity;
                 size_t newChunksNeeded = (additionalNeeded + m_entitiesPerChunk - 1) >> m_entitiesPerChunkShift;
                 
-                // Try batch allocation from pool if available
-                std::vector<void*> pooledMemory;
-                size_t chunksAcquired = 0;
-                
-                if (m_chunkPool) ASTRA_LIKELY
+                // Create chunks directly from pool
+                for (size_t i = 0; i < newChunksNeeded; ++i)
                 {
-                    chunksAcquired = m_chunkPool->AcquireBatch(newChunksNeeded, pooledMemory);
-                }
-                
-                // Create chunks with pooled memory
-                for (size_t i = 0; i < chunksAcquired; ++i)
-                {
-                    auto chunk = Chunk::Create(m_entitiesPerChunk, m_componentDescriptors, pooledMemory[i], m_chunkPool);
+                    auto chunk = m_chunkPool->CreateChunk(m_entitiesPerChunk, m_componentDescriptors);
                     if (!chunk) ASTRA_UNLIKELY
                     {
-                        // This shouldn't happen with valid pooled memory
-                        // Return memory to pool and stop
-                        for (size_t j = i; j < chunksAcquired; ++j)
-                        {
-                            m_chunkPool->Release(pooledMemory[j]);
-                        }
-                        return packedLocations;
-                    }
-                    m_chunks.emplace_back(std::move(chunk));
-                    m_chunkMetrics.emplace_back();
-                }
-                
-                // Allocate remaining chunks without pool
-                for (size_t i = chunksAcquired; i < newChunksNeeded; ++i)
-                {
-                    auto chunk = Chunk::Create(m_entitiesPerChunk, m_componentDescriptors, nullptr, m_chunkPool);
-                    if (!chunk) ASTRA_UNLIKELY
-                    {
-                        // Allocation failed - return what we've added so far
-                        return packedLocations;
+                        return locations;
                     }
                     m_chunks.emplace_back(std::move(chunk));
                     m_chunkMetrics.emplace_back();
                 }
             }
             
-            // Now batch fill chunks efficiently
+            // Now batch fill chunks
             size_t entityIdx = 0;
             size_t chunkIdx = m_firstNonFullChunkIdx;
             
@@ -307,10 +261,9 @@ namespace Astra
                     // Batch add to chunk
                     chunk->BatchAddEntities(entities.subspan(entityIdx, toAdd));
                     
-                    // Record packed locations
                     for (size_t i = 0; i < toAdd; ++i)
                     {
-                        packedLocations.push_back(PackedLocation::Pack(chunkIdx, startIdx + i, m_entitiesPerChunkShift));
+                        locations.push_back(EntityLocation::Create(chunkIdx, startIdx + i));
                     }
                     
                     entityIdx += toAdd;
@@ -326,18 +279,13 @@ namespace Astra
             }
             
             m_entityCount += entityIdx;
-            return packedLocations;
+            return locations;
         }
         
-        /**
-         * Remove entity from archetype
-         * @param packedLocation The packed location (chunkIdx << shift | entityIdx)
-         * @return The entity that was moved to fill the gap (if any)
-         */
-        std::optional<Entity> RemoveEntity(PackedLocation packedLocation)
+        std::optional<Entity> RemoveEntity(EntityLocation location)
         {
-            size_t chunkIdx = packedLocation.GetChunkIndex(m_entitiesPerChunkShift);
-            size_t entityIdx = packedLocation.GetEntityIndex(m_entitiesPerChunkMask);
+            size_t chunkIdx = location.GetChunkIndex();
+            size_t entityIdx = location.GetEntityIndex();
             
             assert(chunkIdx < m_chunks.size());
             
@@ -352,8 +300,6 @@ namespace Astra
                 m_firstNonFullChunkIdx = chunkIdx;
             }
             
-            // Consider removing empty chunks only if it's the last chunk
-            // This avoids invalidating packed locations for entities in later chunks
             if (chunkIdx == m_chunks.size() - 1 && chunkIdx > 0 && m_chunks[chunkIdx]->IsEmpty()) ASTRA_UNLIKELY
             {
                 m_chunks.pop_back();
@@ -369,31 +315,24 @@ namespace Astra
             return movedEntity;
         }
 
-        /**
-         * Remove multiple entities from archetype in batch
-         * @param packedLocations Packed locations of entities to remove
-         * @return Vector of entities that were moved to fill gaps with their new packed locations
-         */
-        std::vector<std::pair<Entity, PackedLocation>> RemoveEntities(std::span<const PackedLocation> packedLocations)
+        std::vector<std::pair<Entity, EntityLocation>> RemoveEntities(std::span<const EntityLocation> locations)
         {
-            if (packedLocations.empty()) ASTRA_UNLIKELY
+            if (locations.empty()) ASTRA_UNLIKELY
                 return {};
                 
-            std::vector<std::pair<Entity, PackedLocation>> movedEntities;
-            movedEntities.reserve(packedLocations.size());
+            std::vector<std::pair<Entity, EntityLocation>> movedEntities;
+            movedEntities.reserve(locations.size());
             
-            // Sort packed locations by chunk for better cache locality
-            // Process in reverse order within each chunk to avoid invalidating indices
-            std::vector<PackedLocation> sortedLocations(packedLocations.begin(), packedLocations.end());
-            std::sort(sortedLocations.begin(), sortedLocations.end(), std::greater<PackedLocation>());
+            std::vector<EntityLocation> sortedLocations(locations.begin(), locations.end());
+            std::sort(sortedLocations.begin(), sortedLocations.end(), std::greater<EntityLocation>());
             
             size_t lowestModifiedChunk = std::numeric_limits<size_t>::max();
             
             // Process removals
-            for (PackedLocation packedLocation : sortedLocations)
+            for (EntityLocation location : sortedLocations)
             {
-                size_t chunkIdx = packedLocation.GetChunkIndex(m_entitiesPerChunkShift);
-                size_t entityIdx = packedLocation.GetEntityIndex(m_entitiesPerChunkMask);
+                size_t chunkIdx = location.GetChunkIndex();
+                size_t entityIdx = location.GetEntityIndex();
                 
                 if (chunkIdx >= m_chunks.size()) ASTRA_UNLIKELY
                     continue;
@@ -402,9 +341,8 @@ namespace Astra
                 auto movedEntity = m_chunks[chunkIdx]->RemoveEntity(entityIdx);
                 if (movedEntity) ASTRA_LIKELY
                 {
-                    // Calculate new packed location for the moved entity
-                    PackedLocation newPackedLocation = PackedLocation::Pack(chunkIdx, entityIdx, m_entitiesPerChunkShift);
-                    movedEntities.emplace_back(*movedEntity, newPackedLocation);
+                    EntityLocation newEntityLocation = EntityLocation::Create(chunkIdx, entityIdx);
+                    movedEntities.emplace_back(*movedEntity, newEntityLocation);
                 }
                 
                 --m_entityCount;
@@ -437,14 +375,14 @@ namespace Astra
         }
         
         template<Component T>
-        ASTRA_NODISCARD T* GetComponent(PackedLocation packedLocation)
+        ASTRA_NODISCARD T* GetComponent(EntityLocation location)
         {
             ComponentID id = TypeID<T>::Value();
             if (!m_mask.Test(id)) ASTRA_UNLIKELY
                 return nullptr;
                 
-            size_t chunkIdx = packedLocation.GetChunkIndex(m_entitiesPerChunkShift);
-            size_t entityIdx = packedLocation.GetEntityIndex(m_entitiesPerChunkMask);
+            size_t chunkIdx = location.GetChunkIndex();
+            size_t entityIdx = location.GetEntityIndex();
             
             assert(chunkIdx < m_chunks.size());
             assert(entityIdx < m_chunks[chunkIdx]->GetCount());
@@ -456,12 +394,12 @@ namespace Astra
          * Set component data
          */
         template<typename T>
-        void SetComponent(PackedLocation packedLocation, T&& value)
+        void SetComponent(EntityLocation location, T&& value)
         {
             using DecayedType = std::decay_t<T>;
             static_assert(Component<DecayedType>, "T must be a Component");
             
-            DecayedType* ptr = GetComponent<DecayedType>(packedLocation);
+            DecayedType* ptr = GetComponent<DecayedType>(location);
             assert(ptr != nullptr);
             *ptr = std::forward<T>(value);
         }
@@ -511,46 +449,27 @@ namespace Astra
             {
                 const size_t count = chunk->GetCount();
                 if (count == 0) ASTRA_UNLIKELY
+                {
                     continue;
+                }
                 
-                ForEachImpl<Components...>(chunk.get(), count, std::forward<Func>(func), 
-                                          std::index_sequence_for<Components...>{});
+                ForEachImpl<Components...>(chunk.get(), count, std::forward<Func>(func), std::index_sequence_for<Components...>{});
             }
         }
-        
-    private:
-        // Helper to expand component arrays with index_sequence
-        template<typename... Components, typename Func, size_t... Is>
-        ASTRA_FORCEINLINE void ForEachImpl(Chunk* chunk, size_t count, Func&& func, 
-                                           std::index_sequence<Is...>)
-        {
-            // Get all component arrays at once
-            auto arrays = std::tuple{chunk->GetComponentArray<Components>()...};
-            const auto& entities = chunk->GetEntities();
-            
-            // Single tight loop - compiler can optimize this as well as manual unrolling
-            for (size_t i = 0; i < count; ++i)
-            {
-                func(entities[i], std::get<Is>(arrays)[i]...);
-            }
-        }
-        
-    public:
-        
         
         /**
          * Move entity data between archetypes
-         * @param dstPackedLocation Packed destination location
+         * @param dstEntityLocation Packed destination location
          * @param srcArchetype Source archetype
-         * @param srcPackedLocation Packed source location
+         * @param srcEntityLocation Packed source location
          */
-        void MoveEntityFrom(PackedLocation dstPackedLocation, Archetype& srcArchetype, PackedLocation srcPackedLocation)
+        void MoveEntityFrom(EntityLocation dstEntityLocation, Archetype& srcArchetype, EntityLocation srcEntityLocation)
         {
             // Get chunk positions
-            size_t dstChunkIdx = dstPackedLocation.GetChunkIndex(m_entitiesPerChunkShift);
-            size_t dstEntityIdx = dstPackedLocation.GetEntityIndex(m_entitiesPerChunkMask);
-            size_t srcChunkIdx = srcPackedLocation.GetChunkIndex(srcArchetype.m_entitiesPerChunkShift);
-            size_t srcEntityIdx = srcPackedLocation.GetEntityIndex(srcArchetype.m_entitiesPerChunkMask);
+            size_t dstChunkIdx = dstEntityLocation.GetChunkIndex();
+            size_t dstEntityIdx = dstEntityLocation.GetEntityIndex();
+            size_t srcChunkIdx = srcEntityLocation.GetChunkIndex();
+            size_t srcEntityIdx = srcEntityLocation.GetEntityIndex();
             
             assert(dstChunkIdx < m_chunks.size());
             assert(srcChunkIdx < srcArchetype.m_chunks.size());
@@ -570,7 +489,10 @@ namespace Astra
             for (ComponentID id = 0; id < MAX_COMPONENTS; ++id)
             {
                 const auto& dstInfo = dstArrays[id];
-                if (!dstInfo.isValid) continue;
+                if (!dstInfo.isValid)
+                {
+                    continue;
+                }
                 
                 void* dstPtr = static_cast<std::byte*>(dstInfo.base) + dstEntityIdx * dstInfo.stride;
                 
@@ -579,12 +501,12 @@ namespace Astra
                 {
                     // Component exists in both archetypes - move it
                     void* srcPtr = static_cast<std::byte*>(srcInfo.base) + srcEntityIdx * srcInfo.stride;
-                    ComponentOps::MoveConstruct(dstInfo.descriptor, dstPtr, srcPtr);
+                    dstInfo.descriptor.MoveConstruct(dstPtr, srcPtr);
                 }
                 else ASTRA_UNLIKELY
                 {
                     // Component doesn't exist in source, default construct
-                    ComponentOps::DefaultConstruct(dstInfo.descriptor, dstPtr);
+                    dstInfo.descriptor.DefaultConstruct(dstPtr);
                 }
             }
         }
@@ -593,13 +515,11 @@ namespace Astra
         ASTRA_NODISCARD size_t GetEntityCount() const noexcept { return m_entityCount; }
         ASTRA_NODISCARD const ComponentMask& GetMask() const noexcept { return m_mask; }
         ASTRA_NODISCARD size_t GetComponentCount() const noexcept { return m_componentCount; }
-        /**
-         * Get entity from packed location
-         */
-        ASTRA_NODISCARD Entity GetEntity(PackedLocation packedLocation) const 
+
+        ASTRA_NODISCARD Entity GetEntity(EntityLocation location) const 
         { 
-            size_t chunkIdx = packedLocation.GetChunkIndex(m_entitiesPerChunkShift);
-            size_t entityIdx = packedLocation.GetEntityIndex(m_entitiesPerChunkMask);
+            size_t chunkIdx = location.GetChunkIndex();
+            size_t entityIdx = location.GetEntityIndex();
             assert(chunkIdx < m_chunks.size());
             return m_chunks[chunkIdx]->GetEntity(entityIdx);
         }
@@ -614,16 +534,13 @@ namespace Astra
         ASTRA_NODISCARD size_t GetEntitiesPerChunkMask() const noexcept { return m_entitiesPerChunkMask; }
         
         // Test/Debug accessors
-        ASTRA_NODISCARD const std::vector<std::unique_ptr<Chunk, ChunkDeleter>>& GetChunks() const { return m_chunks; }
+        ASTRA_NODISCARD const std::vector<std::unique_ptr<ArchetypeChunk, ArchetypeChunkPool::ChunkDeleter>>& GetChunks() const { return m_chunks; }
         ASTRA_NODISCARD const std::vector<ChunkMetrics>& GetChunkMetrics() const { return m_chunkMetrics; }
         
-        /**
-         * Get chunk and entity index from packed location
-         */
-        ASTRA_NODISCARD std::pair<Chunk*, size_t> GetChunkAndIndex(PackedLocation packedLocation)
+        ASTRA_NODISCARD std::pair<ArchetypeChunk*, size_t> GetChunkAndIndex(EntityLocation location)
         {
-            size_t chunkIdx = packedLocation.GetChunkIndex(m_entitiesPerChunkShift);
-            size_t entityIdx = packedLocation.GetEntityIndex(m_entitiesPerChunkMask);
+            size_t chunkIdx = location.GetChunkIndex();
+            size_t entityIdx = location.GetEntityIndex();
             assert(chunkIdx < m_chunks.size());
             return {m_chunks[chunkIdx].get(), entityIdx};
         }
@@ -729,9 +646,7 @@ namespace Astra
          * Deserialize archetype from binary format
          * Factory method that creates a new archetype from serialized data
          */
-        static std::unique_ptr<Archetype> Deserialize(BinaryReader& reader, 
-                                                      const std::vector<ComponentDescriptor>& registryDescriptors,
-                                                      ChunkPool* chunkPool = nullptr)
+        static std::unique_ptr<Archetype> Deserialize(BinaryReader& reader, const std::vector<ComponentDescriptor>& registryDescriptors, ArchetypeChunkPool* componentPool = nullptr)
         {
             // Read archetype metadata - deserialize the bitmap's words
             ComponentMask mask;
@@ -777,7 +692,7 @@ namespace Astra
             
             // Create new archetype
             auto archetype = std::make_unique<Archetype>(mask);
-            archetype->m_chunkPool = chunkPool;
+            archetype->m_chunkPool = componentPool;
             archetype->Initialize(descriptors);
             
             if (!archetype->IsInitialized())
@@ -797,8 +712,7 @@ namespace Astra
                 reader(chunkEntityCount);
                 
                 // Create new chunk
-                void* chunkMemory = archetype->AcquireChunkMemory();
-                auto chunk = Chunk::Create(entitiesPerChunk, descriptors, chunkMemory, chunkPool);
+                auto chunk = componentPool ? componentPool->CreateChunk(entitiesPerChunk, descriptors) : nullptr;
                 if (!chunk)
                 {
                     // Out of memory - cannot continue
@@ -880,7 +794,7 @@ namespace Astra
          * TODO: Implement adaptive coalescing thresholds
          * - Dynamic threshold based on archetype size and access patterns
          * - Consider entity lifetime and churn rate
-         * - Factor in memory pressure from ChunkPool
+         * - Factor in memory pressure from ComponentPool
          * - Machine learning based on historical coalescing effectiveness
          * - Different thresholds for different archetype types (hot vs cold)
          */
@@ -905,9 +819,9 @@ namespace Astra
          * Coalesce sparse chunks to improve memory utilization
          * Returns: pair of (chunks_freed, moved_entities_list)
          */
-        std::pair<size_t, std::vector<std::pair<Entity, PackedLocation>>> CoalesceChunks()
+        std::pair<size_t, std::vector<std::pair<Entity, EntityLocation>>> CoalesceChunks()
         {
-            std::vector<std::pair<Entity, PackedLocation>> allMovedEntities;
+            std::vector<std::pair<Entity, EntityLocation>> allMovedEntities;
             if (m_chunks.size() <= 1) ASTRA_LIKELY return {0, allMovedEntities};
             
             UpdateChunkMetrics();
@@ -989,9 +903,27 @@ namespace Astra
             return {chunksFreed, allMovedEntities};
         }
         
+        void SetComponentPool(ArchetypeChunkPool* pool) { m_chunkPool = pool; }
+
     private:
         static constexpr size_t INVALID_CHUNK_INDEX = std::numeric_limits<size_t>::max();
         
+        // Helper to expand component arrays with index_sequence
+        template<typename... Components, typename Func, size_t... Is>
+        ASTRA_FORCEINLINE void ForEachImpl(ArchetypeChunk* chunk, size_t count, Func&& func, 
+            std::index_sequence<Is...>)
+        {
+            // Get all component arrays at once
+            auto arrays = std::tuple{chunk->GetComponentArray<Components>()...};
+            const auto& entities = chunk->GetEntities();
+
+            // Single tight loop - compiler can optimize this as well as manual unrolling
+            for (size_t i = 0; i < count; ++i)
+            {
+                func(entities[i], std::get<Is>(arrays)[i]...);
+            }
+        }
+
         /**
          * Find or create a chunk with available space
          * @return Pair of (chunk index, whether a new chunk was created)
@@ -1018,7 +950,7 @@ namespace Astra
             }
             
             // Need new chunk
-            auto chunk = Chunk::Create(m_entitiesPerChunk, m_componentDescriptors, AcquireChunkMemory(), m_chunkPool);
+            auto chunk = m_chunkPool->CreateChunk(m_entitiesPerChunk, m_componentDescriptors);
             if (!chunk) ASTRA_UNLIKELY
             {
                 return {INVALID_CHUNK_INDEX, false};  // Can't allocate new chunk
@@ -1031,376 +963,14 @@ namespace Astra
             
             return {chunkIdx, true};
         }
-        
-        // Custom deleter for chunks that returns memory to pool
-        struct ChunkDeleter
-        {
-            ChunkPool* pool = nullptr;
-            bool fromPool = false;
-            void* memory = nullptr;
-            size_t size = 0;
-            bool usedHugePages = false;
-            
-            void operator()(class Chunk* chunk) const
-            {
-                if (chunk) ASTRA_LIKELY
-                {
-                    // Delete chunk first
-                    delete chunk;
-                    
-                    // Then handle memory
-                    if (fromPool && pool && memory) ASTRA_LIKELY
-                    {
-                        pool->Release(memory);
-                    }
-                    else if (!fromPool && memory) ASTRA_UNLIKELY
-                    {
-                        FreeMemory(memory, size, usedHugePages);
-                    }
-                }
-            }
-        };
-        
-        class Chunk
-        {
-        public:
-            // Factory method that returns nullptr on allocation failure
-            static std::unique_ptr<Chunk, ChunkDeleter> Create(size_t entitiesPerChunk, const std::vector<ComponentDescriptor>& componentDescriptors, void* poolMemory = nullptr, ChunkPool* pool = nullptr)
-            {
-                void* memory = poolMemory;
-                bool fromPool = (poolMemory != nullptr);
-                
-                // Track allocation info
-                size_t allocSize = pool ? pool->GetChunkSize() : ChunkPool::DEFAULT_CHUNK_SIZE;
-                bool usedHugePages = false;
-                
-                // Fall back to direct allocation if no pool memory provided
-                if (!memory) ASTRA_UNLIKELY
-                {
-                    AllocResult result = AllocateMemory(allocSize, 64);
-                    memory = result.ptr;
-                    allocSize = result.size;
-                    usedHugePages = result.usedHugePages;
-                    if (!memory) ASTRA_UNLIKELY
-                    {
-                        return nullptr;
-                    }
-                }
-                
-                // Create chunk with allocated memory and custom deleter
-                ChunkDeleter deleter{pool, fromPool, memory, allocSize, usedHugePages};
-                return std::unique_ptr<Chunk, ChunkDeleter>(new Chunk(entitiesPerChunk, componentDescriptors, memory, fromPool, allocSize), deleter);
-            }
-        
-            ~Chunk()
-            {
-                // Destruct all active components using O(1) lookups
-                for (size_t i = 0; i < m_count; ++i)
-                {
-                    for (ComponentID id = 0; id < MAX_COMPONENTS; ++id)
-                    {
-                        const auto& info = m_componentArrays[id];
-                        if (!info.isValid) continue;
-                        
-                        void* ptr = static_cast<std::byte*>(info.base) + i * info.stride;
-                        ComponentOps::Destruct(info.descriptor, ptr);
-                    }
-                }
-                
-                // Memory is either returned to pool by ChunkDeleter or freed here
-                // If from pool, ChunkDeleter is responsible for returning it
-                // Memory deallocation is handled by ChunkDeleter
-            }
-            
-            // Disable copy
-            Chunk(const Chunk&) = delete;
-            Chunk& operator=(const Chunk&) = delete;
-            
-            // Enable move
-            Chunk(Chunk&& other) noexcept
-                : m_memory(std::exchange(other.m_memory, nullptr))
-                , m_capacity(other.m_capacity)
-                , m_count(other.m_count)
-                , m_componentDescriptors(std::move(other.m_componentDescriptors))
-                , m_componentOffsets(std::move(other.m_componentOffsets))
-                , m_arrayBases(std::move(other.m_arrayBases))
-            {
-            }
-            
-            /**
-             * Add entity to chunk (assumes space available)
-             * @return Index within chunk
-             */
-            size_t AddEntity(Entity entity)
-            {
-                assert(m_count < m_capacity);
-                size_t index = m_count++;
-                
-                // Store entity handle
-                m_entities.push_back(entity);
-                
-                // Default construct components using O(1) lookups
-                for (ComponentID id = 0; id < MAX_COMPONENTS; ++id)
-                {
-                    const auto& info = m_componentArrays[id];
-                    if (!info.isValid) continue;
-                    
-                    if (info.descriptor.is_empty) ASTRA_UNLIKELY
-                    {
-                        // Empty types don't need initialization
-                        continue;
-                    }
-                    
-                    void* ptr = static_cast<std::byte*>(info.base) + index * info.stride;
-                    ComponentOps::DefaultConstruct(info.descriptor, ptr);
-                }
-                
-                return index;
-            }
-            
-            void BatchAddEntities(std::span<const Entity> entities)
-            {
-                size_t count = entities.size();
-                assert(m_count + count <= m_capacity);
 
-                // Add entities
-                m_entities.insert(m_entities.end(), entities.begin(), entities.end());
-
-                // Batch default construct components using O(1) lookups
-                for (ComponentID id = 0; id < MAX_COMPONENTS; ++id)
-                {
-                    const auto& info = m_componentArrays[id];
-                    if (!info.isValid) continue;
-
-                    std::byte* startPtr = static_cast<std::byte*>(info.base) + m_count * info.stride;
-                    ComponentOps::BatchDefaultConstruct(info.descriptor, startPtr, count);
-                }
-
-                m_count += count;
-            }
-
-            /**
-             * Remove entity from chunk (swap with last)
-             * @return The entity that was moved to fill the gap (if any)
-             */
-            std::optional<Entity> RemoveEntity(size_t index)
-            {
-                assert(index < m_count);
-                
-                const size_t lastIndex = m_count - 1;
-                std::optional<Entity> movedEntity;
-                
-                if (index != lastIndex) ASTRA_LIKELY
-                {
-                    // Move last entity to this position
-                    m_entities[index] = m_entities[lastIndex];
-                    movedEntity = m_entities[index];
-                    
-                    // Move components using O(1) lookups
-                    for (ComponentID id = 0; id < MAX_COMPONENTS; ++id)
-                    {
-                        const auto& info = m_componentArrays[id];
-                        if (!info.isValid) continue;
-                        
-                        void* dstPtr = static_cast<std::byte*>(info.base) + index * info.stride;
-                        void* srcPtr = static_cast<std::byte*>(info.base) + lastIndex * info.stride;
-                        
-                        // Destruct destination, move from source
-                        ComponentOps::Destruct(info.descriptor, dstPtr);
-                        ComponentOps::MoveConstruct(info.descriptor, dstPtr, srcPtr);
-                    }
-                }
-                else
-                {
-                    // Just destruct the last entity's components using O(1) lookups
-                    for (ComponentID id = 0; id < MAX_COMPONENTS; ++id)
-                    {
-                        const auto& info = m_componentArrays[id];
-                        if (!info.isValid) continue;
-                        
-                        void* ptr = static_cast<std::byte*>(info.base) + lastIndex * info.stride;
-                        ComponentOps::Destruct(info.descriptor, ptr);
-                    }
-                }
-                
-                // Remove last entity
-                m_entities.pop_back();
-                --m_count;
-                
-                return movedEntity;
-            }
-            
-            /**
-             * Get component pointer for specific entity
-             */
-            template<Component T>
-            T* GetComponent(size_t index)
-            {
-                assert(index < m_count);
-                ComponentID id = TypeID<T>::Value();
-                return static_cast<T*>(GetComponentPointer(id, index));
-            }
-            
-            /**
-             * Get base pointer to component array
-             */
-            template<Component T>
-            T* GetComponentArray()
-            {
-                ComponentID id = TypeID<T>::Value();
-                // Direct array access - still O(1)!
-                return reinterpret_cast<T*>(m_componentArrays[id].base);
-            }
-            
-            /**
-             * Get component pointer using cached array base (optimized)
-             */
-            void* GetComponentPointerCached(size_t componentIndex, size_t entityIndex) const
-            {
-                assert(componentIndex < m_arrayBases.size());
-                assert(entityIndex < m_count);
-                return static_cast<std::byte*>(m_arrayBases[componentIndex]) + entityIndex * m_componentDescriptors[componentIndex].size;
-            }
-            
-            /**
-             * Get component array base by component index
-             */
-            template<typename T>
-            T* GetComponentArrayByIndex(size_t componentIndex)
-            {
-                assert(componentIndex < m_arrayBases.size());
-                return reinterpret_cast<T*>(m_arrayBases[componentIndex]);
-            }
-            
-            /**
-             * Get component array by ID (direct access)
-             */
-            void* GetComponentArrayById(ComponentID id) const
-            {
-                return m_componentArrays[id].base;
-            }
-            
-            ASTRA_NODISCARD bool IsFull() const noexcept { return m_count >= m_capacity; }
-            ASTRA_NODISCARD bool IsEmpty() const noexcept { return m_count == 0; }
-            ASTRA_NODISCARD size_t GetCount() const noexcept { return m_count; }
-            ASTRA_NODISCARD size_t GetCapacity() const noexcept { return m_capacity; }
-            ASTRA_NODISCARD Entity GetEntity(size_t index) const { assert(index < m_count); return m_entities[index]; }
-            ASTRA_NODISCARD const std::vector<Entity>& GetEntities() const { return m_entities; }
-            ASTRA_NODISCARD std::vector<Entity>& GetEntities() { return m_entities; }
-            ASTRA_NODISCARD const auto& GetComponentArrays() const { return m_componentArrays; }
-            
-            // Used for chunk coalescing
-            void SetCount(size_t count) noexcept { m_count = count; }
-            
-            void* GetComponentPointer(ComponentID id, size_t index) const
-            {
-                // O(1) lookup with pre-cached stride!
-                const auto& info = m_componentArrays[id];
-                if (!info.base) ASTRA_UNLIKELY return nullptr;
-                
-                return static_cast<std::byte*>(info.base) + index * info.stride;
-            }
-            
-        private:
-            // Private constructor - only callable from factory
-            Chunk(size_t entitiesPerChunk, const std::vector<ComponentDescriptor>& componentDescriptors, void* memory, bool fromPool, size_t chunkSize)
-                : m_memory(memory)
-                , m_capacity(entitiesPerChunk)
-                , m_count(0)
-                , m_componentDescriptors(componentDescriptors)
-                , m_fromPool(fromPool)
-                , m_chunkSize(chunkSize)
-            {
-                // Reserve space for entities
-                m_entities.reserve(m_capacity);
-                
-                // Calculate layout for SoA within chunk
-                CalculateLayout();
-
-                // Clear memory
-                std::memset(m_memory, 0, m_chunkSize);
-
-                // Pre-compute array base pointers and strides
-                m_arrayBases.resize(m_componentDescriptors.size());
-                for (size_t i = 0; i < m_componentDescriptors.size(); ++i)
-                {
-                    void* arrayBase = static_cast<std::byte*>(m_memory) + m_componentOffsets[m_componentDescriptors[i].id];
-                    m_arrayBases[i] = arrayBase;
-                    // Store full descriptor info for O(1) access by ComponentID
-                    m_componentArrays[m_componentDescriptors[i].id] = {
-                        arrayBase, 
-                        m_componentDescriptors[i].size,
-                        m_componentDescriptors[i],
-                        true
-                    };
-                }
-            }
-
-            void CalculateLayout()
-            {
-                size_t offset = 0;
-                
-                for (const auto& comp : m_componentDescriptors)
-                {
-                    // Align offset to cache line boundary for better cache performance
-                    // This prevents false sharing between component arrays
-                    offset = (offset + CACHE_LINE_SIZE - 1) & ~(CACHE_LINE_SIZE - 1);
-                    
-                    // Store offset for this component's array - direct array access
-                    m_componentOffsets[comp.id] = offset;
-                    
-                    // Advance by total size of component array
-                    offset += comp.size * m_capacity;
-                }
-                
-                // Ensure we don't exceed chunk size
-                assert(offset <= m_chunkSize);
-            }
-
-            // Optimized component array info for O(1) lookups
-            struct ComponentArrayInfo {
-                void* base{nullptr};
-                size_t stride{0};  // Component size for pointer arithmetic
-                ComponentDescriptor descriptor{};  // Full descriptor for O(1) component operations
-                bool isValid{false};  // Whether this component exists in the archetype
-            };
-
-            void* m_memory;
-            size_t m_capacity;  // Max entities per chunk
-            size_t m_count;     // Current entity count
-            std::vector<Entity> m_entities;  // Entity handles stored in this chunk
-            std::vector<ComponentDescriptor> m_componentDescriptors;
-            std::array<size_t, MAX_COMPONENTS> m_componentOffsets{};  // Direct array access by ComponentID
-            std::array<ComponentArrayInfo, MAX_COMPONENTS> m_componentArrays{};   // Direct pointers + stride indexed by ComponentID
-            std::vector<void*> m_arrayBases;  // Cached base pointers indexed by component index
-            bool m_fromPool;  // Whether memory came from chunk pool
-            size_t m_chunkSize;  // Size of this chunk
-        };
-
-        void* AcquireChunkMemory()
-        {
-            if (m_chunkPool) ASTRA_LIKELY
-            {
-                return m_chunkPool->Acquire();
-            }
-            return nullptr;
-        }
-
-        void ReleaseChunkMemory(void* memory)
-        {
-            if (m_chunkPool && memory) ASTRA_LIKELY
-            {
-                m_chunkPool->Release(memory);
-            }
-        }
-
-        PackedLocation AddEntityNoConstruct(Entity entity)
+        EntityLocation AddEntityNoConstruct(Entity entity)
         {
             // Find or create a chunk with space
             auto [chunkIdx, wasCreated] = FindOrCreateChunkWithSpace();
             if (chunkIdx == INVALID_CHUNK_INDEX) ASTRA_UNLIKELY
             {
-                return PackedLocation();  // Allocation failed
+                return EntityLocation();  // Allocation failed
             }
 
             // Directly add entity without component construction
@@ -1423,17 +993,12 @@ namespace Astra
                 m_firstNonFullChunkIdx = chunkIdx + 1;
             }
 
-            // Return packed location
-            return PackedLocation::Pack(chunkIdx, entityIdx, m_entitiesPerChunkShift);
+            return EntityLocation::Create(chunkIdx, entityIdx);
         }
         
-        /**
-         * Move entities between chunks for coalescing
-         * Returns pairs of (entity, new_packed_location) for entities that were moved
-         */
-        std::vector<std::pair<Entity, PackedLocation>> MoveEntitiesBetweenChunks(size_t srcChunkIdx, size_t destChunkIdx, size_t count)
+        std::vector<std::pair<Entity, EntityLocation>> MoveEntitiesBetweenChunks(size_t srcChunkIdx, size_t destChunkIdx, size_t count)
         {
-            std::vector<std::pair<Entity, PackedLocation>> movedEntities;
+            std::vector<std::pair<Entity, EntityLocation>> movedEntities;
             movedEntities.reserve(count);
             
             auto& srcChunk = m_chunks[srcChunkIdx];
@@ -1454,9 +1019,8 @@ namespace Astra
                 // Add entity to destination chunk's entity vector
                 destChunk->GetEntities().push_back(entity);
                 
-                // Create packed location for moved entity
-                PackedLocation destPackedLocation = PackedLocation::Pack(destChunkIdx, destEntityIdx, m_entitiesPerChunkShift);
-                movedEntities.emplace_back(entity, destPackedLocation);
+                EntityLocation destEntityLocation = EntityLocation::Create(destChunkIdx, destEntityIdx);
+                movedEntities.emplace_back(entity, destEntityLocation);
                 
                 // Move components using O(1) lookups
                 const auto& srcArrays = srcChunk->GetComponentArrays();
@@ -1471,8 +1035,8 @@ namespace Astra
                     void* destPtr = static_cast<std::byte*>(destArrays[id].base) + destEntityIdx * srcInfo.stride;
                     
                     // Use move constructor to transfer component data
-                    ComponentOps::MoveConstruct(srcInfo.descriptor, destPtr, srcPtr);
-                    ComponentOps::Destruct(srcInfo.descriptor, srcPtr);
+                    srcInfo.descriptor.MoveConstruct(destPtr, srcPtr);
+                    srcInfo.descriptor.Destruct(srcPtr);
                 }
                 
                 // Remove entity from source chunk's entity vector
@@ -1486,48 +1050,52 @@ namespace Astra
             return movedEntities;
         }
 
-        // ====================== Edge Storage Methods (NEW) ======================
+        // ====================== Edge Storage Methods ======================
         
         /**
          * Get or create an edge for adding a component
          * @param componentId The component ID to add
          * @param targetArchetype The archetype to transition to
-         * @return Pointer to the edge (never null)
+         * @return Pointer to the target archetype
          */
-        ArchetypeEdgeStorage::Edge* GetOrCreateAddEdge(ComponentID componentId, Archetype* targetArchetype)
+        Archetype* GetOrCreateAddEdge(ComponentID componentId, Archetype* targetArchetype)
         {
-            return m_addEdges.GetOrCreateEdge(componentId, targetArchetype);
+            m_addEdges.Insert({componentId, targetArchetype});
+            return targetArchetype;
         }
         
         /**
          * Get an edge for adding a component
          * @param componentId The component ID to look up
-         * @return Pointer to the edge if found, nullptr otherwise
+         * @return Pointer to the archetype if found, nullptr otherwise
          */
-        [[nodiscard]] const ArchetypeEdgeStorage::Edge* GetAddEdge(ComponentID componentId) const noexcept
+        [[nodiscard]] Archetype* GetAddEdge(ComponentID componentId) const noexcept
         {
-            return m_addEdges.GetEdge(componentId);
+            auto it = m_addEdges.Find(componentId);
+            return it != m_addEdges.end() ? it->second : nullptr;
         }
         
         /**
          * Get or create an edge for removing a component
          * @param componentId The component ID to remove
          * @param targetArchetype The archetype to transition to
-         * @return Pointer to the edge (never null)
+         * @return Pointer to the target archetype
          */
-        ArchetypeEdgeStorage::Edge* GetOrCreateRemoveEdge(ComponentID componentId, Archetype* targetArchetype)
+        Archetype* GetOrCreateRemoveEdge(ComponentID componentId, Archetype* targetArchetype)
         {
-            return m_removeEdges.GetOrCreateEdge(componentId, targetArchetype);
+            m_removeEdges.Insert({componentId, targetArchetype});
+            return targetArchetype;
         }
         
         /**
          * Get an edge for removing a component
          * @param componentId The component ID to look up
-         * @return Pointer to the edge if found, nullptr otherwise
+         * @return Pointer to the archetype if found, nullptr otherwise
          */
-        [[nodiscard]] const ArchetypeEdgeStorage::Edge* GetRemoveEdge(ComponentID componentId) const noexcept
+        [[nodiscard]] Archetype* GetRemoveEdge(ComponentID componentId) const noexcept
         {
-            return m_removeEdges.GetEdge(componentId);
+            auto it = m_removeEdges.Find(componentId);
+            return it != m_removeEdges.end() ? it->second : nullptr;
         }
         
         /**
@@ -1538,33 +1106,61 @@ namespace Astra
          */
         size_t RemoveEdgesTo(Archetype* archetype)
         {
-            size_t removed = m_addEdges.RemoveEdgesTo(archetype);
-            removed += m_removeEdges.RemoveEdgesTo(archetype);
+            size_t removed = 0;
+            
+            // Remove from add edges
+            auto addIt = m_addEdges.begin();
+            while (addIt != m_addEdges.end())
+            {
+                if (addIt->second == archetype)
+                {
+                    addIt = m_addEdges.Erase(addIt);
+                    ++removed;
+                }
+                else
+                {
+                    ++addIt;
+                }
+            }
+            
+            // Remove from remove edges
+            auto removeIt = m_removeEdges.begin();
+            while (removeIt != m_removeEdges.end())
+            {
+                if (removeIt->second == archetype)
+                {
+                    removeIt = m_removeEdges.Erase(removeIt);
+                    ++removed;
+                }
+                else
+                {
+                    ++removeIt;
+                }
+            }
+            
             return removed;
         }
         
-    private:
         ComponentMask m_mask;
         size_t m_componentCount;  // Cached component count for fast access
         std::vector<ComponentDescriptor> m_componentDescriptors;
-        std::vector<std::unique_ptr<Chunk, ChunkDeleter>> m_chunks;
+        std::vector<std::unique_ptr<ArchetypeChunk, ArchetypeChunkPool::ChunkDeleter>> m_chunks;
         std::vector<ChunkMetrics> m_chunkMetrics;  // Utilization tracking
         size_t m_entityCount;
         size_t m_entitiesPerChunk;
-        size_t m_entitiesPerChunkShift;  // For fast division via bit shift (log2(m_entitiesPerChunk))
-        size_t m_entitiesPerChunkMask;   // For fast modulo operations (m_entitiesPerChunk - 1)
+        size_t m_entitiesPerChunkShift;     // For fast division via bit shift (log2(m_entitiesPerChunk))
+        size_t m_entitiesPerChunkMask;      // For fast modulo operations (m_entitiesPerChunk - 1)
         size_t m_firstNonFullChunkIdx = 0;  // Track first chunk with available space for O(1) lookup
         bool m_initialized;
         
         static constexpr float COALESCE_UTILIZATION_THRESHOLD = 0.5f;
         static constexpr float SPARSE_CHUNK_RATIO_THRESHOLD = 0.25f;
 
-        class ChunkPool* m_chunkPool = nullptr;
+        ArchetypeChunkPool* m_chunkPool = nullptr;
         
-        ArchetypeEdgeStorage m_addEdges;
-        ArchetypeEdgeStorage m_removeEdges;
+        FlatMap<ComponentID, Archetype*> m_addEdges;
+        FlatMap<ComponentID, Archetype*> m_removeEdges;
         friend class ArchetypeStorage;
         template<typename...> friend class View;
-        
     };
 }

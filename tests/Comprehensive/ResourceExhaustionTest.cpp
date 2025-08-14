@@ -4,6 +4,9 @@
 #include <unordered_set>
 #include <iostream>
 #include "Astra/Registry/Registry.hpp"
+#include "Astra/Archetype/ArchetypeChunkPool.hpp"
+#include "Astra/Component/ComponentRegistry.hpp"
+#include "Astra/Core/TypeID.hpp"
 #include "../TestComponents.hpp"
 
 using namespace Astra;
@@ -64,7 +67,7 @@ TEST_F(ResourceExhaustionTest, MaxComponentTypes)
     }
     
     // Verify we can create entities with registered components
-    Entity entity = testRegistry.CreateEntity(Position{1, 2, 3});
+    Entity entity = testRegistry.CreateEntityWith(Position{1, 2, 3});
     EXPECT_TRUE(entity.IsValid());
     EXPECT_NE(testRegistry.GetComponent<Position>(entity), nullptr);
 }
@@ -115,26 +118,37 @@ TEST_F(ResourceExhaustionTest, EntityIDSpaceExhaustion)
 }
 
 // Test memory pool exhaustion
-TEST_F(ResourceExhaustionTest, ChunkPoolExhaustion)
+TEST_F(ResourceExhaustionTest, ArchetypeChunkPoolExhaustion)
 {
     // Create a pool with very limited capacity
-    ChunkPool::Config config;
+    ArchetypeChunkPool::Config config;
     config.chunksPerBlock = 2;     // Small blocks with 2 chunks each
     config.maxChunks = 10;          // Only allow 10 chunks total
     config.initialBlocks = 1;       // Start with 1 block (2 chunks)
     config.useHugePages = false;    // Don't use huge pages for this test
     
-    ChunkPool pool(config);
+    ArchetypeChunkPool pool(config);
     
-    std::vector<void*> allocations;
+    // Create some test component descriptors
+    auto componentRegistry = std::make_shared<ComponentRegistry>();
+    componentRegistry->RegisterComponent<Position>();
+    
+    std::vector<ComponentDescriptor> descriptors;
+    if (const auto* posDesc = componentRegistry->GetComponentDescriptor(TypeID<Position>::Value()))
+    {
+        descriptors.push_back(*posDesc);
+    }
+    
+    std::vector<std::unique_ptr<ArchetypeChunk, ArchetypeChunkPool::ChunkDeleter>> allocations;
     
     // Allocate chunks until exhaustion
+    size_t entitiesPerChunk = 100;
     for (size_t i = 0; i < config.maxChunks + 5; ++i)
     {
-        void* chunk = pool.Acquire();
+        auto chunk = pool.CreateChunk(entitiesPerChunk, descriptors);
         if (chunk != nullptr)
         {
-            allocations.push_back(chunk);
+            allocations.push_back(std::move(chunk));
         }
         else
         {
@@ -147,20 +161,14 @@ TEST_F(ResourceExhaustionTest, ChunkPoolExhaustion)
     // Should have allocated exactly maxChunks
     EXPECT_EQ(allocations.size(), config.maxChunks);
     
-    // Release one chunk
-    pool.Release(allocations.back());
+    // Release one chunk (by resetting unique_ptr)
     allocations.pop_back();
     
     // Should be able to allocate one more
-    void* newChunk = pool.Acquire();
+    auto newChunk = pool.CreateChunk(entitiesPerChunk, descriptors);
     EXPECT_NE(newChunk, nullptr);
     
-    // Clean up
-    pool.Release(newChunk);
-    for (void* chunk : allocations)
-    {
-        pool.Release(chunk);
-    }
+    // Clean up happens automatically through unique_ptr destructors
 }
 
 // Test archetype proliferation (2^n archetypes with n components)
@@ -196,7 +204,7 @@ TEST_F(ResourceExhaustionTest, ArchetypeProliferation)
     // to test single archetype growth
     for (int i = 0; i < 1000; ++i)
     {
-        registry->CreateEntity(Position{}, Velocity{});
+        registry->CreateEntityWith(Position{}, Velocity{});
     }
     
     // Should still have 16 archetypes, but one is much larger
@@ -397,7 +405,7 @@ TEST_F(ResourceExhaustionTest, LargeBatchOperations)
     std::vector<Entity> entities(batchSize);
     
     // Test large batch creation
-    registry->CreateEntities<Position, Velocity>(batchSize, entities,
+    registry->CreateEntitiesWith<Position, Velocity>(batchSize, entities,
         [](size_t i) {
             return std::make_tuple(
                 Position{float(i), float(i * 2), float(i * 3)},
@@ -431,11 +439,11 @@ TEST_F(ResourceExhaustionTest, MaxEntityViewIteration)
     {
         if (i % 2 == 0)
         {
-            registry->CreateEntity(Position{float(i), 0, 0});
+            registry->CreateEntityWith(Position{float(i), 0, 0});
         }
         else
         {
-            registry->CreateEntity(Position{float(i), 0, 0}, Velocity{1, 0, 0});
+            registry->CreateEntityWith(Position{float(i), 0, 0}, Velocity{1, 0, 0});
         }
     }
     
@@ -458,7 +466,7 @@ TEST_F(ResourceExhaustionTest, MemoryCleanupAfterExhaustion)
     std::vector<Entity> entities;
     for (int i = 0; i < 10000; ++i)
     {
-        entities.push_back(registry->CreateEntity(
+        entities.push_back(registry->CreateEntityWith(
             Position{float(i), 0, 0},
             Velocity{1, 0, 0},
             Health{100, 100},
@@ -485,6 +493,6 @@ TEST_F(ResourceExhaustionTest, MemoryCleanupAfterExhaustion)
     EXPECT_LT(currentMemory, peakMemory / 2);
     
     // Registry should still be functional
-    Entity newEntity = registry->CreateEntity(Position{});
+    Entity newEntity = registry->CreateEntityWith(Position{});
     EXPECT_TRUE(registry->IsValid(newEntity));
 }
