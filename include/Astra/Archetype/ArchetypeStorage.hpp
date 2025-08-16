@@ -70,13 +70,6 @@ namespace Astra
             }
         };
         
-        // TODO: Add defragmentation triggers based on utilization thresholds
-        // - Periodic background defragmentation based on global memory pressure
-        // - Prioritize defragmentation of archetypes with highest fragmentation cost
-        // - Implement incremental defragmentation to avoid frame spikes
-        // - Add API for manual defragmentation triggers
-        // - Consider implementing a defragmentation budget (max entities moved per frame)
-        
         // Default constructor creates new component registry
         explicit ArchetypeStorage(const ArchetypeChunkPool::Config& poolConfig = {}) 
             : m_chunkPool(poolConfig)

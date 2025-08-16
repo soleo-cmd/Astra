@@ -113,14 +113,6 @@ namespace Astra
     {
     
     public:
-        // Chunk utilization metrics for coalescing
-        struct ChunkMetrics
-        {
-            float utilization = 0.0f;      // Current fill percentage
-            size_t frameLastAccessed = 0;  // For hot/cold detection
-            bool isHot = false;            // Frequently accessed chunk
-        };
-        
         explicit Archetype(ComponentMask mask) :
             m_mask(mask),
             m_componentCount(mask.Count()),
@@ -186,7 +178,6 @@ namespace Astra
                 return;
             }
             m_chunks.emplace_back(std::move(chunk));
-            m_chunkMetrics.resize(1);  // Initialize metrics for first chunk
         }
         
         /**
@@ -240,7 +231,6 @@ namespace Astra
                         return locations;
                     }
                     m_chunks.emplace_back(std::move(chunk));
-                    m_chunkMetrics.emplace_back();
                 }
             }
             
@@ -303,7 +293,6 @@ namespace Astra
             if (chunkIdx == m_chunks.size() - 1 && chunkIdx > 0 && m_chunks[chunkIdx]->IsEmpty()) ASTRA_UNLIKELY
             {
                 m_chunks.pop_back();
-                m_chunkMetrics.pop_back();
                 
                 // If we removed the last chunk, we might need to update first non-full index
                 if (m_firstNonFullChunkIdx >= m_chunks.size()) ASTRA_UNLIKELY
@@ -362,7 +351,6 @@ namespace Astra
             while (!m_chunks.empty() && m_chunks.back()->IsEmpty() && m_chunks.size() > 1) ASTRA_UNLIKELY
             {
                 m_chunks.pop_back();
-                m_chunkMetrics.pop_back();
             }
             
             // Ensure first non-full index is valid
@@ -418,7 +406,6 @@ namespace Astra
                 // For power of 2: ceil(a/b) = (a + b - 1) >> log2(b)
                 size_t neededChunks = (required - currentCapacity + m_entitiesPerChunk - 1) >> m_entitiesPerChunkShift;
                 m_chunks.reserve(m_chunks.size() + neededChunks);
-                m_chunkMetrics.reserve(m_chunks.capacity());
             }
         }
         
@@ -444,13 +431,32 @@ namespace Astra
             if (m_entityCount == 0 || m_chunks.empty()) ASTRA_UNLIKELY
                 return;
             
-            // Single optimized path using index_sequence
-            for (auto& chunk : m_chunks)
+            const size_t numChunks = m_chunks.size();
+            
+            // Process chunks with prefetching
+            for (size_t i = 0; i < numChunks; ++i)
             {
+                auto& chunk = m_chunks[i];
                 const size_t count = chunk->GetCount();
                 if (count == 0) ASTRA_UNLIKELY
                 {
                     continue;
+                }
+                
+                // Prefetch next chunk's data while processing current chunk
+                if (i + 1 < numChunks) ASTRA_LIKELY
+                {
+                    auto& nextChunk = m_chunks[i + 1];
+                    if (nextChunk->GetCount() > 0)
+                    {
+                        // Prefetch the entity array and first component array of next chunk
+                        Simd::Ops::PrefetchT0(&nextChunk->GetEntities()[0]);
+                        if constexpr (sizeof...(Components) > 0)
+                        {
+                            using FirstComponent = std::tuple_element_t<0, std::tuple<Components...>>;
+                            Simd::Ops::PrefetchT0(nextChunk->GetComponentArray<FirstComponent>());
+                        }
+                    }
                 }
                 
                 ForEachImpl<Components...>(chunk.get(), count, std::forward<Func>(func), std::index_sequence_for<Components...>{});
@@ -533,9 +539,24 @@ namespace Astra
         ASTRA_NODISCARD size_t GetEntitiesPerChunkShift() const noexcept { return m_entitiesPerChunkShift; }
         ASTRA_NODISCARD size_t GetEntitiesPerChunkMask() const noexcept { return m_entitiesPerChunkMask; }
         
+        /**
+         * Calculate fragmentation level of this archetype
+         * @return Fragmentation ratio (0.0 = no fragmentation, 1.0 = maximum fragmentation)
+         */
+        ASTRA_NODISCARD float GetFragmentationLevel() const noexcept
+        {
+            if (m_chunks.empty() || m_entityCount == 0)
+                return 0.0f;
+            
+            // Calculate optimal chunk count (if perfectly packed)
+            size_t optimalChunkCount = (m_entityCount + m_entitiesPerChunk - 1) / m_entitiesPerChunk;
+            
+            // Fragmentation = (actual chunks - optimal chunks) / actual chunks
+            return static_cast<float>(m_chunks.size() - optimalChunkCount) / static_cast<float>(m_chunks.size());
+        }
+        
         // Test/Debug accessors
         ASTRA_NODISCARD const std::vector<std::unique_ptr<ArchetypeChunk, ArchetypeChunkPool::ChunkDeleter>>& GetChunks() const { return m_chunks; }
-        ASTRA_NODISCARD const std::vector<ChunkMetrics>& GetChunkMetrics() const { return m_chunkMetrics; }
         
         ASTRA_NODISCARD std::pair<ArchetypeChunk*, size_t> GetChunkAndIndex(EntityLocation location)
         {
@@ -544,18 +565,6 @@ namespace Astra
             assert(chunkIdx < m_chunks.size());
             return {m_chunks[chunkIdx].get(), entityIdx};
         }
-        
-        /**
-         * Update utilization metrics for all chunks
-         */
-        void UpdateChunkMetrics()
-        {
-            for (size_t i = 0; i < m_chunks.size(); ++i)
-            {
-                m_chunkMetrics[i].utilization = static_cast<float>(m_chunks[i]->GetCount()) / m_entitiesPerChunk;
-            }
-        }
-        
         /**
          * Serialize archetype to binary format
          * Maintains SOA layout for efficient storage
@@ -702,7 +711,6 @@ namespace Astra
             
             // Clear the pre-allocated chunk
             archetype->m_chunks.clear();
-            archetype->m_chunkMetrics.clear();
             archetype->m_entityCount = 0;
             
             // Read each chunk's data
@@ -779,40 +787,28 @@ namespace Astra
                 }
                 
                 archetype->m_chunks.push_back(std::move(chunk));
-                archetype->m_chunkMetrics.push_back({});
             }
             
             archetype->m_entityCount = entityCount;
-            archetype->UpdateChunkMetrics();
             
             return archetype;
         }
         
         /**
-         * Check if coalescing is needed based on utilization
-         * 
-         * TODO: Implement adaptive coalescing thresholds
-         * - Dynamic threshold based on archetype size and access patterns
-         * - Consider entity lifetime and churn rate
-         * - Factor in memory pressure from ComponentPool
-         * - Machine learning based on historical coalescing effectiveness
-         * - Different thresholds for different archetype types (hot vs cold)
+         * Check if coalescing would be beneficial
          */
         ASTRA_NODISCARD bool NeedsCoalescing() const
         {
             if (m_chunks.size() <= 1) ASTRA_LIKELY return false;
             
-            size_t sparseCount = 0;
-            for (size_t i = 1; i < m_chunkMetrics.size(); ++i)  // Skip first chunk
+            // Simple heuristic: coalesce if we have sparse chunks
+            for (size_t i = 1; i < m_chunks.size(); ++i)
             {
-                if (m_chunkMetrics[i].utilization < COALESCE_UTILIZATION_THRESHOLD) ASTRA_UNLIKELY
-                {
-                    ++sparseCount;
-                }
+                float utilization = static_cast<float>(m_chunks[i]->GetCount()) / m_entitiesPerChunk;
+                if (utilization < COALESCE_UTILIZATION_THRESHOLD)
+                    return true;
             }
-            
-            float sparseRatio = static_cast<float>(sparseCount) / (m_chunks.size() - 1);
-            return sparseRatio > SPARSE_CHUNK_RATIO_THRESHOLD;
+            return false;
         }
         
         /**
@@ -824,81 +820,63 @@ namespace Astra
             std::vector<std::pair<Entity, EntityLocation>> allMovedEntities;
             if (m_chunks.size() <= 1) ASTRA_LIKELY return {0, allMovedEntities};
             
-            UpdateChunkMetrics();
-            
-            // Find sparse chunks (excluding first chunk)
-            std::vector<size_t> sparseIndices;
-            for (size_t i = 1; i < m_chunks.size(); ++i)
+            // Single pass: find and sort sparse chunks
+            std::vector<std::pair<size_t, float>> sparseChunks;
+            for (size_t i = 1; i < m_chunks.size(); ++i)  // Skip first chunk
             {
-                if (m_chunkMetrics[i].utilization < COALESCE_UTILIZATION_THRESHOLD) ASTRA_UNLIKELY
+                float utilization = static_cast<float>(m_chunks[i]->GetCount()) / m_entitiesPerChunk;
+                if (utilization < COALESCE_UTILIZATION_THRESHOLD)
                 {
-                    sparseIndices.push_back(i);
+                    sparseChunks.emplace_back(i, utilization);
                 }
             }
             
-            if (sparseIndices.empty()) ASTRA_LIKELY return {0, allMovedEntities};
+            if (sparseChunks.empty()) ASTRA_LIKELY return {0, allMovedEntities};
             
             // Sort by utilization (least utilized first)
-            std::sort(sparseIndices.begin(), sparseIndices.end(),
-                [this](size_t a, size_t b) {
-                    return m_chunkMetrics[a].utilization < m_chunkMetrics[b].utilization;
-                });
-            
-            size_t chunksFreed = 0;
+            std::sort(sparseChunks.begin(), sparseChunks.end(),
+                [](const auto& a, const auto& b) { return a.second < b.second; });
             
             // Try to pack entities from sparse chunks into denser ones
-            for (size_t sparseIdx : sparseIndices)
+            for (const auto& [sparseIdx, _] : sparseChunks)
             {
                 auto& sparseChunk = m_chunks[sparseIdx];
                 size_t entitiesToMove = sparseChunk->GetCount();
                 
-                if (entitiesToMove == 0) ASTRA_UNLIKELY
-                {
-                    // Empty chunk - can be removed immediately
-                    // Note: We'll handle removal after moving entities
-                    continue;
-                }
+                if (entitiesToMove == 0) continue;
                 
                 // Find destination chunks with available space
                 for (size_t destIdx = 0; destIdx < m_chunks.size(); ++destIdx)
                 {
-                    if (destIdx == sparseIdx) ASTRA_UNLIKELY continue;
+                    if (destIdx == sparseIdx) continue;
                     
                     auto& destChunk = m_chunks[destIdx];
                     size_t available = m_entitiesPerChunk - destChunk->GetCount();
                     
-                    if (available > 0) ASTRA_LIKELY
+                    if (available > 0)
                     {
                         size_t toMove = std::min(available, entitiesToMove);
                         
                         // Move entities from sparse to destination chunk
-                        // Note: Caller (ArchetypeStorage) must update entity locations
                         auto movedEntities = MoveEntitiesBetweenChunks(sparseIdx, destIdx, toMove);
                         allMovedEntities.insert(allMovedEntities.end(), movedEntities.begin(), movedEntities.end());
                         
                         entitiesToMove -= toMove;
-                        if (entitiesToMove == 0) ASTRA_LIKELY break;
+                        if (entitiesToMove == 0) break;
                     }
                 }
             }
             
-            // Remove empty chunks (in reverse order to maintain indices)
-            for (auto it = m_chunks.rbegin(); it != m_chunks.rend(); )
+            // Remove empty chunks (simple backwards iteration)
+            size_t chunksFreed = 0;
+            for (size_t i = m_chunks.size(); i-- > 1; )  // Skip first chunk
             {
-                size_t idx = std::distance(it + 1, m_chunks.rend());
-                if (idx > 0 && (*it)->IsEmpty()) ASTRA_UNLIKELY  // Don't remove first chunk
+                if (m_chunks[i]->IsEmpty())
                 {
-                    it = std::reverse_iterator(m_chunks.erase((it + 1).base()));
-                    m_chunkMetrics.erase(m_chunkMetrics.begin() + idx);
+                    m_chunks.erase(m_chunks.begin() + i);
                     ++chunksFreed;
                 }
-                else
-                {
-                    ++it;
-                }
             }
-            
-            // No need to update entity array size anymore - entities are stored in chunks
             
             return {chunksFreed, allMovedEntities};
         }
@@ -910,8 +888,7 @@ namespace Astra
         
         // Helper to expand component arrays with index_sequence
         template<typename... Components, typename Func, size_t... Is>
-        ASTRA_FORCEINLINE void ForEachImpl(ArchetypeChunk* chunk, size_t count, Func&& func, 
-            std::index_sequence<Is...>)
+        ASTRA_FORCEINLINE void ForEachImpl(ArchetypeChunk* chunk, size_t count, Func&& func, std::index_sequence<Is...>)
         {
             // Get all component arrays at once
             auto arrays = std::tuple{chunk->GetComponentArray<Components>()...};
@@ -957,7 +934,6 @@ namespace Astra
             }
             
             m_chunks.emplace_back(std::move(chunk));
-            m_chunkMetrics.emplace_back();  // Add metrics for new chunk
             chunkIdx = m_chunks.size() - 1;  // Use the newly created chunk
             m_firstNonFullChunkIdx = chunkIdx;  // Update cache to new chunk
             
@@ -1145,7 +1121,6 @@ namespace Astra
         size_t m_componentCount;  // Cached component count for fast access
         std::vector<ComponentDescriptor> m_componentDescriptors;
         std::vector<std::unique_ptr<ArchetypeChunk, ArchetypeChunkPool::ChunkDeleter>> m_chunks;
-        std::vector<ChunkMetrics> m_chunkMetrics;  // Utilization tracking
         size_t m_entityCount;
         size_t m_entitiesPerChunk;
         size_t m_entitiesPerChunkShift;     // For fast division via bit shift (log2(m_entitiesPerChunk))

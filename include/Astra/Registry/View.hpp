@@ -261,50 +261,51 @@ namespace Astra
             }
         }
         
-        template<typename... Components, typename Func, size_t... RequiredIs, size_t... OptionalIs>
-        ASTRA_FORCEINLINE void ForEachWithOptional(Archetype* archetype, Func&& func, std::index_sequence<RequiredIs...>, std::index_sequence<OptionalIs...>)
+        // Helper to invoke callback without nested std::apply
+        template<typename EntitiesVec, typename ReqTuple, typename OptTuple, typename Func, size_t... ReqIs, size_t... OptIs>
+        ASTRA_FORCEINLINE void InvokeEntityCallback(const EntitiesVec& entities, const ReqTuple& reqPtrs, const OptTuple& optPtrs, size_t count, Func&& func, std::index_sequence<ReqIs...>, std::index_sequence<OptIs...>)
+        {
+            for (size_t i = 0; i < count; ++i)
+            {
+                func(entities[i], std::get<ReqIs>(reqPtrs)[i]..., (std::get<OptIs>(optPtrs) ? &std::get<OptIs>(optPtrs)[i] : nullptr)...);
+            }
+        }
+        
+        template<typename... Components, typename Func, size_t... RequiredTs, size_t... OptionalTs>
+        ASTRA_FORCEINLINE void ForEachWithOptional(Archetype* archetype, Func&& func, std::index_sequence<RequiredTs...>, std::index_sequence<OptionalTs...>)
         {
             using RequiredTypes = RequiredTuple;
             using OptionalTypes = OptionalTuple;
             
-            constexpr size_t OptionalCount = sizeof...(OptionalIs);
+            constexpr size_t OptionalCount = sizeof...(OptionalTs);
             std::array<bool, OptionalCount> hasOptional =
             {
-                archetype->HasComponent<std::tuple_element_t<OptionalIs, OptionalTypes>>()...
+                archetype->HasComponent<std::tuple_element_t<OptionalTs, OptionalTypes>>()...
             };
             
             const auto& chunks = archetype->GetChunks();
             
-            // Get chunks and iterate
             for (auto& chunk : chunks)
             {
                 size_t count = chunk->GetCount();
-                if (count == 0) ASTRA_UNLIKELY continue;
+                if (count == 0) ASTRA_UNLIKELY
+                {
+                    continue;
+                }
                 
-                // Get component arrays for required components
-                std::tuple<std::tuple_element_t<RequiredIs, RequiredTypes>*...> requiredPtrs = {
-                    chunk->template GetComponentArray<std::tuple_element_t<RequiredIs, RequiredTypes>>()...
+                std::tuple<std::tuple_element_t<RequiredTs, RequiredTypes>*...> requiredPtrs =
+                {
+                    chunk->GetComponentArray<std::tuple_element_t<RequiredTs, RequiredTypes>>()...
                 };
                 
-                // Get component arrays for optional components (may be nullptr)
-                std::tuple<std::tuple_element_t<OptionalIs, OptionalTypes>*...> optionalPtrs = {
-                    (hasOptional[OptionalIs] ? 
-                     chunk->template GetComponentArray<std::tuple_element_t<OptionalIs, OptionalTypes>>() : 
-                     nullptr)...
+                std::tuple<std::tuple_element_t<OptionalTs, OptionalTypes>*...> optionalPtrs =
+                {
+                    (hasOptional[OptionalTs] ? chunk->GetComponentArray<std::tuple_element_t<OptionalTs, OptionalTypes>>() : nullptr)...
                 };
                 
-                // Get entities
                 const auto& entities = chunk->GetEntities();
                 
-                // Call function for each entity
-                for (size_t i = 0; i < count; ++i)
-                {
-                    std::apply([&, i](auto*... reqPtrs) {
-                        std::apply([&, i](auto*... optPtrs) {
-                            func(entities[i], reqPtrs[i]..., (optPtrs ? &optPtrs[i] : nullptr)...);
-                        }, optionalPtrs);
-                    }, requiredPtrs);
-                }
+                InvokeEntityCallback(entities, requiredPtrs, optionalPtrs, count, std::forward<Func>(func),std::make_index_sequence<sizeof...(RequiredTs)>{}, std::make_index_sequence<sizeof...(OptionalTs)>{});
             }
         }
         

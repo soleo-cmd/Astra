@@ -326,35 +326,156 @@ namespace Astra
         // ====================== Archetype API ======================
         
         // Re-export types from ArchetypeStorage for convenience
-        using CleanupOptions = ArchetypeStorage::CleanupOptions;
         using ArchetypeInfo = ArchetypeStorage::ArchetypeInfo;
         
         /**
-         * Remove empty archetypes based on specified options
+         * Options for controlling defragmentation behavior
+         */
+        struct DefragmentationOptions
+        {
+            // Archetype-level cleanup
+            size_t minEmptyDuration = 1;              // Remove archetypes empty for N updates
+            size_t minArchetypesToKeep = 8;           // Never go below this many archetypes
+            size_t maxArchetypesToRemove = 10;        // Limit per call (for incremental)
+            
+            // Chunk-level defragmentation
+            bool defragmentChunks = true;             // Enable chunk coalescing
+            float chunkUtilizationThreshold = 0.5f;   // Pack chunks below this utilization
+            size_t maxChunksToProcess = 100;          // Limit chunks processed per call
+            
+            // Global limits
+            size_t maxEntitiesToMove = 10000;         // Total entity move budget
+            bool incremental = false;                 // If true, strictly respect all limits
+        };
+        
+        /**
+         * Results from a defragmentation operation
+         */
+        struct DefragmentationResult
+        {
+            size_t archetypesRemoved = 0;
+            size_t chunksRemoved = 0;
+            size_t entitiesMoved = 0;
+            size_t archetypesProcessed = 0;
+            float fragmentationBefore = 0.0f;
+            float fragmentationAfter = 0.0f;
+            
+            ASTRA_NODISCARD bool DidWork() const noexcept 
+            { 
+                return archetypesRemoved > 0 || chunksRemoved > 0 || entitiesMoved > 0; 
+            }
+        };
+        
+        /**
+         * Unified defragmentation operation
          * 
-         * This is a lazy cleanup approach - you control when cleanup happens.
-         * Call during loading screens, pause menus, or other convenient times.
+         * Performs both chunk coalescing and empty archetype removal in a single call.
+         * Can be configured for incremental operation during gameplay or aggressive
+         * cleanup during loading screens.
          * 
-         * @param options Configuration for cleanup behavior
-         * @return Number of archetypes removed
+         * @param options Configuration for defragmentation behavior
+         * @return Result containing statistics about the operation
          * 
          * Example usage:
-         *   // Simple cleanup during loading
-         *   registry.CleanupEmptyArchetypes();
+         *   // Simple full defragmentation
+         *   auto result = registry.Defragment();
          *   
-         *   // Incremental cleanup during gameplay
-         *   CleanupOptions options;
-         *   options.maxArchetypesToRemove = 5;  // Limit per frame
-         *   options.minEmptyDuration = 300;     // Empty for 5 seconds
-         *   registry.CleanupEmptyArchetypes(options);
+         *   // Incremental during gameplay (limit work per frame)
+         *   DefragmentationOptions incremental;
+         *   incremental.incremental = true;
+         *   incremental.maxEntitiesToMove = 100;
+         *   incremental.maxChunksToProcess = 10;
+         *   auto result = registry.Defragment(incremental);
+         *   
+         *   // Aggressive during loading screen
+         *   DefragmentationOptions aggressive;
+         *   aggressive.maxArchetypesToRemove = SIZE_MAX;
+         *   aggressive.maxEntitiesToMove = SIZE_MAX;
+         *   aggressive.chunkUtilizationThreshold = 0.9f;
+         *   auto result = registry.Defragment(aggressive);
          */
-        size_t CleanupEmptyArchetypes(const CleanupOptions& options = {})
+        DefragmentationResult Defragment(const DefragmentationOptions& options = {})
         {
-            // Update metrics before cleanup
-            m_archetypeStorage->UpdateArchetypeMetrics();
+            DefragmentationResult result;
             
-            // Perform cleanup
-            return m_archetypeStorage->CleanupEmptyArchetypes(options);
+            // Calculate initial fragmentation
+            result.fragmentationBefore = GetFragmentationLevel();
+            
+            size_t totalEntitiesMoved = 0;
+            auto archetypes = m_archetypeStorage->GetAllArchetypes();
+            
+            // Step 1: Defragment chunks within archetypes
+            if (options.defragmentChunks)
+            {
+                size_t chunksProcessed = 0;
+                
+                for (auto* arch : archetypes)
+                {
+                    // Check limits
+                    if (options.incremental)
+                    {
+                        if (chunksProcessed >= options.maxChunksToProcess) break;
+                        if (totalEntitiesMoved >= options.maxEntitiesToMove) break;
+                    }
+                    
+                    // Skip if archetype has few chunks or is already well-packed
+                    if (arch->GetChunks().size() <= 1) continue;
+                    
+                    // Only process archetypes with significant fragmentation
+                    float archFragmentation = arch->GetFragmentationLevel();
+                    if (archFragmentation < (1.0f - options.chunkUtilizationThreshold)) continue;
+                    
+                    // Perform chunk coalescing
+                    auto [chunksFreed, movedEntities] = arch->CoalesceChunks();
+                    
+                    // Update entity locations in ArchetypeStorage
+                    for (const auto& [entity, newLocation] : movedEntities)
+                    {
+                        m_archetypeStorage->SetEntityLocation(entity, arch, newLocation);
+                    }
+                    
+                    result.chunksRemoved += chunksFreed;
+                    totalEntitiesMoved += movedEntities.size();
+                    chunksProcessed += arch->GetChunks().size();
+                    result.archetypesProcessed++;
+                    
+                    // Break if we've hit our entity move budget
+                    if (options.incremental && totalEntitiesMoved >= options.maxEntitiesToMove)
+                    {
+                        break;
+                    }
+                }
+                
+                result.entitiesMoved = totalEntitiesMoved;
+            }
+            
+            // Step 2: Remove empty archetypes
+            // Only do this if we haven't exhausted our limits
+            if (!options.incremental || totalEntitiesMoved < options.maxEntitiesToMove)
+            {
+                // Update metrics before cleanup
+                m_archetypeStorage->UpdateArchetypeMetrics();
+                
+                // Build cleanup options from our defragmentation options
+                ArchetypeStorage::CleanupOptions cleanupOpts;
+                cleanupOpts.minEmptyDuration = options.minEmptyDuration;
+                cleanupOpts.minArchetypesToKeep = options.minArchetypesToKeep;
+                cleanupOpts.maxArchetypesToRemove = options.maxArchetypesToRemove;
+                
+                // If we're in incremental mode and close to entity limit, reduce archetype removals
+                if (options.incremental && totalEntitiesMoved > options.maxEntitiesToMove * 0.8f)
+                {
+                    cleanupOpts.maxArchetypesToRemove = std::min(size_t(2), options.maxArchetypesToRemove);
+                }
+                
+                // Use the existing implementation which handles all the complex removal logic
+                result.archetypesRemoved = m_archetypeStorage->CleanupEmptyArchetypes(cleanupOpts);
+            }
+            
+            // Calculate final fragmentation
+            result.fragmentationAfter = GetFragmentationLevel();
+            
+            return result;
         }
         
         /**
@@ -693,6 +814,42 @@ namespace Astra
         {
             BinaryReader reader(data);
             return LoadInternal(reader, std::move(componentRegistry));
+        }
+        
+        /**
+         * Calculate overall fragmentation level across all archetypes
+         * @return Fragmentation ratio (0.0 = no fragmentation, 1.0 = maximum fragmentation)
+         */
+        ASTRA_NODISCARD float GetFragmentationLevel() const
+        {
+            auto archetypes = m_archetypeStorage->GetAllArchetypes();
+            if (archetypes.empty()) return 0.0f;
+            
+            size_t totalEntities = 0;
+            size_t totalChunks = 0;
+            size_t optimalChunks = 0;
+            
+            for (const auto* arch : archetypes)
+            {
+                size_t entityCount = arch->GetEntityCount();
+                size_t chunkCount = arch->GetChunks().size();
+                
+                totalEntities += entityCount;
+                totalChunks += chunkCount;
+                
+                // Calculate optimal chunks for this archetype
+                if (entityCount > 0)
+                {
+                    size_t entitiesPerChunk = arch->GetEntitiesPerChunk();
+                    optimalChunks += (entityCount + entitiesPerChunk - 1) / entitiesPerChunk;
+                }
+            }
+            
+            if (totalChunks == 0) return 0.0f;
+            
+            // Fragmentation = excess chunks / total chunks
+            size_t excessChunks = totalChunks > optimalChunks ? totalChunks - optimalChunks : 0;
+            return static_cast<float>(excessChunks) / static_cast<float>(totalChunks);
         }
         
     private:
