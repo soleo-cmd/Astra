@@ -481,11 +481,12 @@ TEST_F(ResourceExhaustionTest, MemoryCleanupAfterExhaustion)
     registry->DestroyEntities(entities);
     
     // Run cleanup
-    Registry::CleanupOptions options;
+    Registry::DefragmentationOptions options;
     options.minEmptyDuration = 0; // Clean immediately
     options.minArchetypesToKeep = 1;
     
-    size_t removed = registry->CleanupEmptyArchetypes(options);
+    auto result = registry->Defragment(options);
+    size_t removed = result.archetypesRemoved;
     EXPECT_GT(removed, 0u);
     
     // Memory usage should be significantly reduced

@@ -567,9 +567,6 @@ TEST_F(ArchetypeTest, ChunkCoalescing)
     
     archetype.RemoveEntities(toRemove);
     
-    // Update metrics
-    archetype.UpdateChunkMetrics();
-    
     // Check if coalescing is needed
     bool needsCoalescing = archetype.NeedsCoalescing();
     // This depends on thresholds but with 80% removed, it should need coalescing
