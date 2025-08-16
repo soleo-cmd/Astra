@@ -336,11 +336,12 @@ TEST_F(RegistryTest, ArchetypeCleanup)
     registry->DestroyEntities(entities);
     
     // Cleanup empty archetypes
-    Astra::Registry::CleanupOptions options;
+    Astra::Registry::DefragmentationOptions options;
     options.minEmptyDuration = 1;
     options.minArchetypesToKeep = 1;
     
-    size_t removed = registry->CleanupEmptyArchetypes(options);
+    auto result = registry->Defragment(options);
+    size_t removed = result.archetypesRemoved;
     EXPECT_GT(removed, 0u);
     
     // Should have fewer archetypes

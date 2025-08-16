@@ -62,11 +62,12 @@ TEST_F(MemoryCleanupTest, MemoryReleasedAfterDestruction)
     size_t afterDestroyMemory = GetCurrentMemoryUsage();
     EXPECT_GT(afterDestroyMemory, 0u) << "Some memory still allocated in pools";
     
-    Registry::CleanupOptions options;
+    Registry::DefragmentationOptions options;
     options.minEmptyDuration = 0;
     options.minArchetypesToKeep = 1;
     
-    size_t cleaned = registry->CleanupEmptyArchetypes(options);
+    auto result = registry->Defragment(options);
+    size_t cleaned = result.archetypesRemoved;
     EXPECT_GT(cleaned, 0u) << "Should have cleaned some archetypes";
     
     size_t finalMemory = GetCurrentMemoryUsage();
@@ -105,9 +106,10 @@ TEST_F(MemoryCleanupTest, RapidArchetypeTransitionCleanup)
     
     registry->DestroyEntity(entity);
     
-    Registry::CleanupOptions options;
+    Registry::DefragmentationOptions options;
     options.minEmptyDuration = 0;
-    size_t cleaned = registry->CleanupEmptyArchetypes(options);
+    auto result = registry->Defragment(options);
+    size_t cleaned = result.archetypesRemoved;
     
     EXPECT_GT(cleaned, 0u) << "Should clean up empty archetypes";
     
@@ -211,9 +213,9 @@ TEST_F(MemoryCleanupTest, ComponentSizeMemoryUsage)
     EXPECT_GT(largeIncrease, mediumIncrease) << "Large components should use more memory";
     
     registry->Clear();
-    Registry::CleanupOptions options;
+    Registry::DefragmentationOptions options;
     options.minEmptyDuration = 0;
-    registry->CleanupEmptyArchetypes(options);
+    registry->Defragment(options);
 }
 
 TEST_F(MemoryCleanupTest, ArchetypeFragmentation)
@@ -298,9 +300,9 @@ TEST_F(MemoryCleanupTest, ClearMemoryCleanup)
     
     size_t afterClear = GetCurrentMemoryUsage();
     
-    Registry::CleanupOptions options;
+    Registry::DefragmentationOptions options;
     options.minEmptyDuration = 0;
-    registry->CleanupEmptyArchetypes(options);
+    registry->Defragment(options);
     
     size_t afterCleanup = GetCurrentMemoryUsage();
     size_t afterArchetypes = GetArchetypeCount();
@@ -327,29 +329,32 @@ TEST_F(MemoryCleanupTest, CleanupOptionsRespected)
     
     size_t archetypesBefore = GetArchetypeCount();
     
-    Registry::CleanupOptions options1;
+    Registry::DefragmentationOptions options1;
     options1.minEmptyDuration = 100;
     
-    size_t cleaned1 = registry->CleanupEmptyArchetypes(options1);
+    auto result1 = registry->Defragment(options1);
+    size_t cleaned1 = result1.archetypesRemoved;
     EXPECT_EQ(cleaned1, 0u) << "Shouldn't clean archetypes that haven't been empty long enough";
     
     for (int i = 0; i < 5; ++i)
     {
-        registry->CleanupEmptyArchetypes(options1);
+        registry->Defragment(options1);
     }
     
-    Registry::CleanupOptions options2;
+    Registry::DefragmentationOptions options2;
     options2.minEmptyDuration = 1;
     options2.maxArchetypesToRemove = 1;
     
-    size_t cleaned2 = registry->CleanupEmptyArchetypes(options2);
+    auto result2 = registry->Defragment(options2);
+    size_t cleaned2 = result2.archetypesRemoved;
     EXPECT_LE(cleaned2, 1u) << "Should respect maxArchetypesToRemove";
     
-    Registry::CleanupOptions options3;
+    Registry::DefragmentationOptions options3;
     options3.minEmptyDuration = 0;
     options3.minArchetypesToKeep = archetypesBefore;
     
-    size_t cleaned3 = registry->CleanupEmptyArchetypes(options3);
+    auto result3 = registry->Defragment(options3);
+    size_t cleaned3 = result3.archetypesRemoved;
     EXPECT_EQ(cleaned3, 0u) << "Should respect minArchetypesToKeep";
 }
 

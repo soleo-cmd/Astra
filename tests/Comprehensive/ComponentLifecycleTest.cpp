@@ -476,9 +476,9 @@ TEST_F(ComponentLifecycleTest, ArchetypeCleanupLifecycle)
         registry->DestroyEntities(batchEntities);
     }
     
-    Registry::CleanupOptions options;
+    Registry::DefragmentationOptions options;
     options.minEmptyDuration = 0;
-    registry->CleanupEmptyArchetypes(options);
+    registry->Defragment(options);
     
     EXPECT_TRUE(LifecycleComponent::stats.IsBalanced())
         << "After cleanup - Constructed: " << LifecycleComponent::stats.TotalConstructed()
