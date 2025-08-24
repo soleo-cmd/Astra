@@ -3,12 +3,12 @@
 #include <memory>
 #include <queue>
 #include <type_traits>
-#include <unordered_set>
 
-#include "../Archetype/ArchetypeStorage.hpp"
+#include "../Archetype/ArchetypeManager.hpp"
+#include "../Container/FlatSet.hpp"
 #include "../Core/Base.hpp"
 #include "../Entity/Entity.hpp"
-#include "../Entity/EntityPool.hpp"
+#include "../Entity/EntityManager.hpp"
 #include "Query.hpp"
 #include "RelationshipGraph.hpp"
 
@@ -87,7 +87,7 @@ namespace Astra
                 if (root.IsValid())
                 {
                     // Mark root as visited to prevent cycles
-                    m_visited.insert(root);
+                    m_visited.Insert(root);
                     
                     // Start traversal from root's children/parent
                     if (descendants)
@@ -95,20 +95,20 @@ namespace Astra
                         const auto& children = m_graph->GetChildren(root);
                         for (Entity child : children)
                         {
-                            if (m_visited.find(child) == m_visited.end())
+                            if (m_visited.Find(child) == m_visited.end())
                             {
                                 m_queue.push({child, 1});
-                                m_visited.insert(child);
+                                m_visited.Insert(child);
                             }
                         }
                     }
                     else
                     {
                         Entity parent = m_graph->GetParent(root);
-                        if (parent.IsValid() && m_visited.find(parent) == m_visited.end())
+                        if (parent.IsValid() && m_visited.Find(parent) == m_visited.end())
                         {
                             m_queue.push({parent, 1});
-                            m_visited.insert(parent);
+                            m_visited.Insert(parent);
                         }
                     }
                     
@@ -163,20 +163,20 @@ namespace Astra
                         const auto& children = m_graph->GetChildren(candidate.entity);
                         for (Entity child : children)
                         {
-                            if (m_visited.find(child) == m_visited.end())
+                            if (m_visited.Find(child) == m_visited.end())
                             {
                                 m_queue.push({child, candidate.depth + 1});
-                                m_visited.insert(child);
+                                m_visited.Insert(child);
                             }
                         }
                     }
                     else
                     {
                         Entity parent = m_graph->GetParent(candidate.entity);
-                        if (parent.IsValid() && m_visited.find(parent) == m_visited.end())
+                        if (parent.IsValid() && m_visited.Find(parent) == m_visited.end())
                         {
                             m_queue.push({parent, candidate.depth + 1});
-                            m_visited.insert(parent);
+                            m_visited.Insert(parent);
                         }
                     }
                     
@@ -195,7 +195,7 @@ namespace Astra
             const RelationshipGraph* m_graph = nullptr;
             bool m_descendants = true;
             std::queue<Entry> m_queue;
-            std::unordered_set<Entity> m_visited;
+            FlatSet<Entity> m_visited;
             Entry m_current{};
         };
         
@@ -224,7 +224,7 @@ namespace Astra
         class FilteredView
         {
         public:
-            class Iterator
+            class iterator
             {
             public:
                 using iterator_category = std::forward_iterator_tag;
@@ -233,10 +233,12 @@ namespace Astra
                 using pointer = const Entity*;
                 using reference = const Entity&;
                 
-                Iterator() = default;
+                iterator() = default;
                 
-                Iterator(const Relations* parent, typename Container::const_iterator it, typename Container::const_iterator end)
-                    : m_parent(parent), m_it(it), m_end(end)
+                iterator(const Relations* parent, typename Container::const_iterator it, typename Container::const_iterator end) :
+                    m_parent(parent),
+                    m_it(it),
+                    m_end(end)
                 {
                     // Skip to first passing entity
                     while (m_it != m_end && !m_parent->PassesFilter(*m_it))
@@ -248,7 +250,7 @@ namespace Astra
                 reference operator*() const { return *m_it; }
                 pointer operator->() const { return &(*m_it); }
                 
-                Iterator& operator++()
+                iterator& operator++()
                 {
                     ++m_it;
                     while (m_it != m_end && !m_parent->PassesFilter(*m_it))
@@ -258,19 +260,19 @@ namespace Astra
                     return *this;
                 }
                 
-                Iterator operator++(int)
+                iterator operator++(int)
                 {
-                    Iterator tmp = *this;
+                    iterator tmp = *this;
                     ++(*this);
                     return tmp;
                 }
                 
-                friend bool operator==(const Iterator& a, const Iterator& b)
+                friend bool operator==(const iterator& a, const iterator& b)
                 {
                     return a.m_it == b.m_it;
                 }
                 
-                friend bool operator!=(const Iterator& a, const Iterator& b)
+                friend bool operator!=(const iterator& a, const iterator& b)
                 {
                     return !(a == b);
                 }
@@ -281,11 +283,12 @@ namespace Astra
                 typename Container::const_iterator m_end;
             };
             
-            FilteredView(const Relations* parent, const Container& container)
-                : m_parent(parent), m_container(container) {}
+            FilteredView(const Relations* parent, const Container& container) :
+                m_parent(parent),
+                m_container(container) {}
             
-            Iterator begin() const { return Iterator(m_parent, m_container.begin(), m_container.end()); }
-            Iterator end() const { return Iterator(m_parent, m_container.end(), m_container.end()); }
+            iterator begin() const { return iterator(m_parent, m_container.begin(), m_container.end()); }
+            iterator end() const { return iterator(m_parent, m_container.end(), m_container.end()); }
             bool empty() const { return begin() == end(); }
             
         private:
@@ -294,16 +297,12 @@ namespace Astra
         };
         
         // Constructor
-        Relations(std::shared_ptr<ArchetypeStorage> storage, 
-                 std::shared_ptr<EntityPool> entityPool,
-                 Entity entity, 
-                 const RelationshipGraph* graph)
-            : m_storage(std::move(storage))
-            , m_entityPool(std::move(entityPool))
+        Relations(std::shared_ptr<ArchetypeManager> manager, std::shared_ptr<EntityManager> entityManager, Entity entity, const RelationshipGraph* graph)
+            : m_manager(std::move(manager))
+            , m_entityManager(std::move(entityManager))
             , m_entity(entity)
             , m_graph(graph)
-        {
-        }
+        {}
         
         /**
          * @brief Get the parent of the entity (filtered by components if applicable)
@@ -391,14 +390,14 @@ namespace Astra
         void ForEachDescendant(Func&& func, TraversalOrder order = TraversalOrder::BreadthFirst)
         {
             std::queue<std::pair<Entity, size_t>> queue;
-            std::unordered_set<Entity> visited;
-            visited.insert(m_entity);
+            FlatSet<Entity> visited;
+            visited.Insert(m_entity);
             
             // Initialize with children
             const auto& children = m_graph->GetChildren(m_entity);
             for (Entity child : children)
             {
-                if (visited.insert(child).second && PassesFilter(child))
+                if (visited.Insert(child).second && PassesFilter(child))
                 {
                     if (order == TraversalOrder::BreadthFirst)
                     {
@@ -426,7 +425,7 @@ namespace Astra
                     const auto& entityChildren = m_graph->GetChildren(entity);
                     for (Entity child : entityChildren)
                     {
-                        if (visited.insert(child).second && PassesFilter(child))
+                        if (visited.Insert(child).second && PassesFilter(child))
                         {
                             queue.push({child, depth + 1});
                         }
@@ -455,12 +454,12 @@ namespace Astra
         // DFS helper
         template<typename Func>
         void ForEachDescendantDFS(Entity current, size_t depth, 
-                                 std::unordered_set<Entity>& visited, Func&& func)
+                                 FlatSet<Entity>& visited, Func&& func)
         {
             const auto& children = m_graph->GetChildren(current);
             for (Entity child : children)
             {
-                if (visited.insert(child).second && PassesFilter(child))
+                if (visited.Insert(child).second && PassesFilter(child))
                 {
                     InvokeWithDepth(child, depth + 1, std::forward<Func>(func));
                     ForEachDescendantDFS(child, depth + 1, visited, std::forward<Func>(func));
@@ -491,7 +490,7 @@ namespace Astra
             }
             else
             {
-                func(entity, *m_storage->GetComponent<Components>(entity)...);
+                func(entity, *m_manager->GetComponent<Components>(entity)...);
             }
         }
         
@@ -518,7 +517,7 @@ namespace Astra
             }
             else
             {
-                func(entity, depth, *m_storage->GetComponent<Components>(entity)...);
+                func(entity, depth, *m_manager->GetComponent<Components>(entity)...);
             }
         }
         
@@ -572,7 +571,7 @@ namespace Astra
             if constexpr (sizeof...(Ts) == 0)
                 return true;
             else
-                return ((m_storage->GetComponent<Ts>(entity) != nullptr) && ...);
+                return ((m_manager->GetComponent<Ts>(entity) != nullptr) && ...);
         }
         
         template<typename... Ts>
@@ -581,7 +580,7 @@ namespace Astra
             if constexpr (sizeof...(Ts) == 0)
                 return false;
             else
-                return ((m_storage->GetComponent<Ts>(entity) != nullptr) || ...);
+                return ((m_manager->GetComponent<Ts>(entity) != nullptr) || ...);
         }
         
         bool CheckAnyGroups(Entity entity) const
@@ -605,7 +604,7 @@ namespace Astra
         template<typename... Ts>
         bool HasAnyInGroup(Entity entity, std::tuple<Ts...>) const
         {
-            return ((m_storage->GetComponent<Ts>(entity) != nullptr) || ...);
+            return ((m_manager->GetComponent<Ts>(entity) != nullptr) || ...);
         }
         
         bool CheckOneOfGroups(Entity entity) const
@@ -629,11 +628,11 @@ namespace Astra
         template<typename... Ts>
         size_t CountInGroup(Entity entity, std::tuple<Ts...>) const
         {
-            return ((m_storage->GetComponent<Ts>(entity) != nullptr ? 1 : 0) + ...);
+            return ((m_manager->GetComponent<Ts>(entity) != nullptr ? 1 : 0) + ...);
         }
         
-        std::shared_ptr<ArchetypeStorage> m_storage;
-        std::shared_ptr<EntityPool> m_entityPool;
+        std::shared_ptr<ArchetypeManager> m_manager;
+        std::shared_ptr<EntityManager> m_entityManager;
         Entity m_entity;
         const RelationshipGraph* m_graph;
     };

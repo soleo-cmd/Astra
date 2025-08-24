@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include <Astra/Entity/EntityPool.hpp>
+#include <Astra/Entity/EntityManager.hpp>
 #include <Astra/Serialization/BinaryWriter.hpp>
 #include <Astra/Serialization/BinaryReader.hpp>
 #include <vector>
@@ -12,7 +12,7 @@ namespace
     using namespace Astra;
 }
 
-class EntityPoolSerializationTest : public ::testing::Test
+class EntityManagerSerializationTest : public ::testing::Test
 {
 protected:
     void SetUp() override
@@ -24,10 +24,10 @@ protected:
     }
 };
 
-TEST_F(EntityPoolSerializationTest, EmptyPool)
+TEST_F(EntityManagerSerializationTest, EmptyPool)
 {
     // Create empty pool
-    EntityPool pool;
+    EntityManager pool;
     
     // Serialize
     std::vector<std::byte> buffer;
@@ -40,7 +40,7 @@ TEST_F(EntityPoolSerializationTest, EmptyPool)
     // Deserialize
     {
         BinaryReader reader(buffer);
-        auto result = EntityPool::Deserialize(reader);
+        auto result = EntityManager::Deserialize(reader);
         ASSERT_TRUE(result.IsOk());
         
         auto& newPool = *result.GetValue();
@@ -50,9 +50,9 @@ TEST_F(EntityPoolSerializationTest, EmptyPool)
     }
 }
 
-TEST_F(EntityPoolSerializationTest, SingleEntity)
+TEST_F(EntityManagerSerializationTest, SingleEntity)
 {
-    EntityPool pool;
+    EntityManager pool;
     
     // Create an entity
     Entity e = pool.Create();
@@ -69,7 +69,7 @@ TEST_F(EntityPoolSerializationTest, SingleEntity)
     // Deserialize
     {
         BinaryReader reader(buffer);
-        auto result = EntityPool::Deserialize(reader);
+        auto result = EntityManager::Deserialize(reader);
         ASSERT_TRUE(result.IsOk());
         
         auto& newPool = *result.GetValue();
@@ -78,9 +78,9 @@ TEST_F(EntityPoolSerializationTest, SingleEntity)
     }
 }
 
-TEST_F(EntityPoolSerializationTest, MultipleEntities)
+TEST_F(EntityManagerSerializationTest, MultipleEntities)
 {
-    EntityPool pool;
+    EntityManager pool;
     
     // Create multiple entities
     std::vector<Entity> entities;
@@ -106,7 +106,7 @@ TEST_F(EntityPoolSerializationTest, MultipleEntities)
     // Deserialize
     {
         BinaryReader reader(buffer);
-        auto result = EntityPool::Deserialize(reader);
+        auto result = EntityManager::Deserialize(reader);
         ASSERT_TRUE(result.IsOk());
         
         auto& newPool = *result.GetValue();
@@ -120,9 +120,9 @@ TEST_F(EntityPoolSerializationTest, MultipleEntities)
     }
 }
 
-TEST_F(EntityPoolSerializationTest, WithRecycledEntities)
+TEST_F(EntityManagerSerializationTest, WithRecycledEntities)
 {
-    EntityPool pool;
+    EntityManager pool;
     
     // Create some entities
     std::vector<Entity> entities;
@@ -157,7 +157,7 @@ TEST_F(EntityPoolSerializationTest, WithRecycledEntities)
     // Deserialize
     {
         BinaryReader reader(buffer);
-        auto result = EntityPool::Deserialize(reader);
+        auto result = EntityManager::Deserialize(reader);
         ASSERT_TRUE(result.IsOk());
         
         auto& newPool = *result.GetValue();
@@ -190,9 +190,9 @@ TEST_F(EntityPoolSerializationTest, WithRecycledEntities)
     }
 }
 
-TEST_F(EntityPoolSerializationTest, BatchCreation)
+TEST_F(EntityManagerSerializationTest, BatchCreation)
 {
-    EntityPool pool;
+    EntityManager pool;
     
     // Batch create entities
     std::vector<Entity> entities(1000);
@@ -211,7 +211,7 @@ TEST_F(EntityPoolSerializationTest, BatchCreation)
     // Deserialize
     {
         BinaryReader reader(buffer);
-        auto result = EntityPool::Deserialize(reader);
+        auto result = EntityManager::Deserialize(reader);
         ASSERT_TRUE(result.IsOk());
         
         auto& newPool = *result.GetValue();
@@ -225,11 +225,11 @@ TEST_F(EntityPoolSerializationTest, BatchCreation)
     }
 }
 
-TEST_F(EntityPoolSerializationTest, MultipleSegments)
+TEST_F(EntityManagerSerializationTest, MultipleSegments)
 {
     // Create pool with small segments for testing
-    EntityPool::Config config(1024);  // Small segments
-    EntityPool pool(config);
+    EntityManager::Config config(1024);  // Small segments
+    EntityManager pool(config);
     
     // Create enough entities to span multiple segments
     std::vector<Entity> entities;
@@ -251,7 +251,7 @@ TEST_F(EntityPoolSerializationTest, MultipleSegments)
     // Deserialize
     {
         BinaryReader reader(buffer);
-        auto result = EntityPool::Deserialize(reader);
+        auto result = EntityManager::Deserialize(reader);
         ASSERT_TRUE(result.IsOk());
         
         auto& newPool = *result.GetValue();
@@ -265,15 +265,15 @@ TEST_F(EntityPoolSerializationTest, MultipleSegments)
     }
 }
 
-TEST_F(EntityPoolSerializationTest, PreserveConfiguration)
+TEST_F(EntityManagerSerializationTest, PreserveConfiguration)
 {
     // Create pool with custom configuration
-    EntityPool::Config config(8192);
-    config.releaseThreshold = 0.2f;
-    config.autoRelease = false;
-    config.maxEmptySegments = 5;
+    EntityManager::Config config(8192);
+    config.tableConfig.releaseThreshold = 0.2f;
+    config.tableConfig.autoRelease = false;
+    config.tableConfig.maxEmptySegments = 5;
     
-    EntityPool pool(config);
+    EntityManager pool(config);
     
     // Create some entities
     for (int i = 0; i < 100; ++i)
@@ -292,7 +292,7 @@ TEST_F(EntityPoolSerializationTest, PreserveConfiguration)
     // Deserialize
     {
         BinaryReader reader(buffer);
-        auto result = EntityPool::Deserialize(reader);
+        auto result = EntityManager::Deserialize(reader);
         ASSERT_TRUE(result.IsOk());
         
         auto& newPool = *result.GetValue();
@@ -303,13 +303,13 @@ TEST_F(EntityPoolSerializationTest, PreserveConfiguration)
     }
 }
 
-TEST_F(EntityPoolSerializationTest, VersionWraparound)
+TEST_F(EntityManagerSerializationTest, VersionWraparound)
 {
-    EntityPool pool;
+    EntityManager pool;
     
     // Create and destroy entity many times to test version wraparound
     Entity e = pool.Create();
-    Entity::Type id = e.GetID();
+    Entity::IDType id = e.GetID();
     
     // Destroy and recreate many times
     for (int i = 0; i < 300; ++i)  // Will wrap around 255
@@ -331,7 +331,7 @@ TEST_F(EntityPoolSerializationTest, VersionWraparound)
     // Deserialize
     {
         BinaryReader reader(buffer);
-        auto result = EntityPool::Deserialize(reader);
+        auto result = EntityManager::Deserialize(reader);
         ASSERT_TRUE(result.IsOk());
         
         auto& newPool = *result.GetValue();
@@ -339,9 +339,9 @@ TEST_F(EntityPoolSerializationTest, VersionWraparound)
     }
 }
 
-TEST_F(EntityPoolSerializationTest, GlobalFreeList)
+TEST_F(EntityManagerSerializationTest, GlobalFreeList)
 {
-    EntityPool pool;
+    EntityManager pool;
     
     // Create entities
     std::vector<Entity> entities;
@@ -370,7 +370,7 @@ TEST_F(EntityPoolSerializationTest, GlobalFreeList)
     // Deserialize
     {
         BinaryReader reader(buffer);
-        auto result = EntityPool::Deserialize(reader);
+        auto result = EntityManager::Deserialize(reader);
         ASSERT_TRUE(result.IsOk());
         
         auto& newPool = *result.GetValue();
@@ -394,9 +394,9 @@ TEST_F(EntityPoolSerializationTest, GlobalFreeList)
     }
 }
 
-TEST_F(EntityPoolSerializationTest, Iterator)
+TEST_F(EntityManagerSerializationTest, Iterator)
 {
-    EntityPool pool;
+    EntityManager pool;
     
     // Create entities with some gaps
     std::vector<Entity> entities;
@@ -437,7 +437,7 @@ TEST_F(EntityPoolSerializationTest, Iterator)
     // Deserialize
     {
         BinaryReader reader(buffer);
-        auto result = EntityPool::Deserialize(reader);
+        auto result = EntityManager::Deserialize(reader);
         ASSERT_TRUE(result.IsOk());
         
         auto& newPool = *result.GetValue();
@@ -453,9 +453,9 @@ TEST_F(EntityPoolSerializationTest, Iterator)
     }
 }
 
-TEST_F(EntityPoolSerializationTest, LargeScale)
+TEST_F(EntityManagerSerializationTest, LargeScale)
 {
-    EntityPool pool;
+    EntityManager pool;
     
     // Create many entities
     std::vector<Entity> entities;
@@ -494,7 +494,7 @@ TEST_F(EntityPoolSerializationTest, LargeScale)
     // Deserialize
     {
         BinaryReader reader(buffer);
-        auto result = EntityPool::Deserialize(reader);
+        auto result = EntityManager::Deserialize(reader);
         ASSERT_TRUE(result.IsOk());
         
         auto& newPool = *result.GetValue();

@@ -309,7 +309,7 @@ TEST_F(ArchetypeTest, ChunkAllocationAndCapacity)
     
     // Add enough entities to require multiple chunks
     size_t totalEntities = entitiesPerChunk * 2 + 10;
-    for (Astra::Entity::Type i = 0; i < totalEntities; ++i)
+    for (Astra::Entity::IDType i = 0; i < totalEntities; ++i)
     {
         archetype.AddEntity(Astra::Entity(i, 1));
     }
@@ -499,7 +499,7 @@ TEST_F(ArchetypeTest, EnsureCapacity)
     // Add entities - should not need to allocate new chunks during loop
     for (size_t i = 0; i < targetCount; ++i)
     {
-        archetype.AddEntity(Astra::Entity(static_cast<Astra::Entity::Type>(i), 1));
+        archetype.AddEntity(Astra::Entity(static_cast<Astra::Entity::IDType>(i), 1));
     }
     
     EXPECT_EQ(archetype.GetEntityCount(), targetCount);
@@ -525,7 +525,7 @@ TEST_F(ArchetypeTest, CalculateRemainingCapacity)
     size_t toAdd = entitiesPerChunk / 2;
     for (size_t i = 0; i < toAdd; ++i)
     {
-        archetype.AddEntity(Astra::Entity(static_cast<Astra::Entity::Type>(i), 1));
+        archetype.AddEntity(Astra::Entity(static_cast<Astra::Entity::IDType>(i), 1));
     }
     
     // Remaining capacity should decrease
@@ -551,7 +551,7 @@ TEST_F(ArchetypeTest, ChunkCoalescing)
     
     for (size_t i = 0; i < totalEntities; ++i)
     {
-        locations.push_back(archetype.AddEntity(Astra::Entity(static_cast<Astra::Entity::Type>(i), 1)));
+        locations.push_back(archetype.AddEntity(Astra::Entity(static_cast<Astra::Entity::IDType>(i), 1)));
     }
     
     // Remove many entities to create sparse chunks
@@ -640,7 +640,7 @@ TEST_F(ArchetypeTest, StressTestManyEntities)
     entities.reserve(entityCount);
     for (size_t i = 0; i < entityCount; ++i)
     {
-        entities.emplace_back(static_cast<Astra::Entity::Type>(i), 1);
+        entities.emplace_back(static_cast<Astra::Entity::IDType>(i), 1);
     }
     
     auto locations = archetype.AddEntities(entities);
@@ -681,14 +681,14 @@ TEST_F(ArchetypeTest, ChunkBoundaryConditions)
     // Fill exactly one chunk
     for (size_t i = 0; i < entitiesPerChunk; ++i)
     {
-        archetype.AddEntity(Astra::Entity(static_cast<Astra::Entity::Type>(i), 1));
+        archetype.AddEntity(Astra::Entity(static_cast<Astra::Entity::IDType>(i), 1));
     }
     
     EXPECT_EQ(archetype.GetEntityCount(), entitiesPerChunk);
     EXPECT_EQ(archetype.GetChunks().size(), 1u);
     
     // Add one more - should create new chunk
-    archetype.AddEntity(Astra::Entity(static_cast<Astra::Entity::Type>(entitiesPerChunk), 1));
+    archetype.AddEntity(Astra::Entity(static_cast<Astra::Entity::IDType>(entitiesPerChunk), 1));
     
     EXPECT_EQ(archetype.GetEntityCount(), entitiesPerChunk + 1);
     EXPECT_EQ(archetype.GetChunks().size(), 2u);
@@ -710,7 +710,7 @@ TEST_F(ArchetypeTest, ComponentAccessPatterns)
     
     for (size_t i = 0; i < count; ++i)
     {
-        locations.push_back(archetype.AddEntity(Astra::Entity(static_cast<Astra::Entity::Type>(i), 1)));
+        locations.push_back(archetype.AddEntity(Astra::Entity(static_cast<Astra::Entity::IDType>(i), 1)));
     }
     
     // Test different access patterns
@@ -833,7 +833,7 @@ TEST_F(ArchetypeTest, SerializeWithEntities)
     
     for (size_t i = 0; i < entityCount; ++i)
     {
-        Astra::Entity entity(static_cast<Astra::Entity::Type>(i), 1);
+        Astra::Entity entity(static_cast<Astra::Entity::IDType>(i), 1);
         entities.push_back(entity);
         
         Astra::EntityLocation loc = archetype.AddEntity(entity);
@@ -940,7 +940,7 @@ TEST_F(ArchetypeTest, SerializeMultipleChunks)
     std::vector<Astra::Entity> entities;
     for (size_t i = 0; i < entityCount; ++i)
     {
-        Astra::Entity entity(static_cast<Astra::Entity::Type>(i), 1);
+        Astra::Entity entity(static_cast<Astra::Entity::IDType>(i), 1);
         entities.push_back(entity);
         
         Astra::EntityLocation loc = archetype.AddEntity(entity);
@@ -1024,7 +1024,7 @@ TEST_F(ArchetypeTest, SerializeNonTrivialComponents)
     
     for (size_t i = 0; i < entityCount; ++i)
     {
-        Astra::Entity entity(static_cast<Astra::Entity::Type>(i), 1);
+        Astra::Entity entity(static_cast<Astra::Entity::IDType>(i), 1);
         entities.push_back(entity);
         
         Astra::EntityLocation loc = archetype.AddEntity(entity);

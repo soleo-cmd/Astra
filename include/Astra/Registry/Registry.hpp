@@ -9,15 +9,16 @@
 #include <vector>
 
 #include "../Archetype/Archetype.hpp"
-#include "../Archetype/ArchetypeStorage.hpp"
+#include "../Archetype/ArchetypeManager.hpp"
 #include "../Component/Component.hpp"
+#include "../Container/SmallVector.hpp"
 #include "../Component/ComponentRegistry.hpp"
 #include "../Core/Base.hpp"
 #include "../Core/Result.hpp"
 #include "../Core/Signal.hpp"
 #include "../Core/TypeID.hpp"
 #include "../Entity/Entity.hpp"
-#include "../Entity/EntityPool.hpp"
+#include "../Entity/EntityManager.hpp"
 #include "../Serialization/BinaryReader.hpp"
 #include "../Serialization/BinaryWriter.hpp"
 #include "../Serialization/SerializationError.hpp"
@@ -33,28 +34,28 @@ namespace Astra
     public:
         struct Config
         {
-            EntityPool::Config entityPoolConfig;
+            EntityManager::Config entityManagerConfig;
             ArchetypeChunkPool::Config chunkPoolConfig;
         };
         
         explicit Registry(const Config& config = {}) :
-            m_entityPool(std::make_shared<EntityPool>(config.entityPoolConfig)),
-            m_archetypeStorage(std::make_shared<ArchetypeStorage>(config.chunkPoolConfig))
+            m_entityManager(std::make_shared<EntityManager>(config.entityManagerConfig)),
+            m_archetypeManager(std::make_shared<ArchetypeManager>(config.chunkPoolConfig))
         {}
         
-        Registry(const EntityPool::Config& entityConfig, const ArchetypeChunkPool::Config& chunkConfig) :
-            m_entityPool(std::make_shared<EntityPool>(entityConfig)),
-            m_archetypeStorage(std::make_shared<ArchetypeStorage>(chunkConfig))
+        Registry(const EntityManager::Config& entityConfig, const ArchetypeChunkPool::Config& chunkConfig) :
+            m_entityManager(std::make_shared<EntityManager>(entityConfig)),
+            m_archetypeManager(std::make_shared<ArchetypeManager>(chunkConfig))
         {}
         
         Registry(std::shared_ptr<ComponentRegistry> componentRegistry, const Config& config = {}) :
-            m_entityPool(std::make_shared<EntityPool>(config.entityPoolConfig)),
-            m_archetypeStorage(std::make_shared<ArchetypeStorage>(componentRegistry, config.chunkPoolConfig))
+            m_entityManager(std::make_shared<EntityManager>(config.entityManagerConfig)),
+            m_archetypeManager(std::make_shared<ArchetypeManager>(componentRegistry, config.chunkPoolConfig))
         {}
         
         explicit Registry(const Registry& other, const Config& config = {}) :
-            m_entityPool(std::make_shared<EntityPool>(config.entityPoolConfig)),
-            m_archetypeStorage(std::make_shared<ArchetypeStorage>(other.GetComponentRegistry(), config.chunkPoolConfig))
+            m_entityManager(std::make_shared<EntityManager>(config.entityManagerConfig)),
+            m_archetypeManager(std::make_shared<ArchetypeManager>(other.GetComponentRegistry(), config.chunkPoolConfig))
         {}
         
         template<Component... Components>
@@ -62,8 +63,8 @@ namespace Astra
         {
             if constexpr (sizeof...(Components) == 0)
             {
-                Entity entity = m_entityPool->Create();
-                m_archetypeStorage->AddEntity(entity);
+                Entity entity = m_entityManager->Create();
+                m_archetypeManager->AddEntity(entity);
                 
                 m_signalManager.Emit<Events::EntityCreated>(entity);
                 
@@ -78,19 +79,19 @@ namespace Astra
         template<Component... Components>
         Entity CreateEntityWith(Components&&... components)
         {
-            Entity entity = m_entityPool->Create();
-            Archetype* archetype = m_archetypeStorage->GetOrCreateArchetype<Components...>();
+            Entity entity = m_entityManager->Create();
+            Archetype* archetype = m_archetypeManager->GetOrCreateArchetype<Components...>();
             EntityLocation location = archetype->AddEntity(entity);
             
             if (!location.IsValid())
             {
-                m_entityPool->Destroy(entity);
+                m_entityManager->Destroy(entity);
                 return Entity::Invalid();
             }
             
             ((archetype->SetComponent<Components>(location, std::forward<Components>(components))), ...);
             
-            m_archetypeStorage->SetEntityLocation(entity, archetype, location);
+            m_archetypeManager->SetEntityLocation(entity, archetype, location);
             
             m_signalManager.Emit<Events::EntityCreated>(entity);
             
@@ -108,18 +109,18 @@ namespace Astra
             if (count == 0 || outEntities.size() < count)
                 return;
             
-            m_entityPool->CreateBatch(count, outEntities.begin());
+            m_entityManager->CreateBatch(count, outEntities.begin());
             
             if constexpr (sizeof...(Components) > 0)
             {
                 auto generator = [](size_t) { return std::make_tuple(Components{}...); };
-                m_archetypeStorage->AddEntities<Components...>(outEntities.subspan(0, count), generator);
+                m_archetypeManager->AddEntities<Components...>(outEntities.subspan(0, count), generator);
             }
             else
             {
                 for (size_t i = 0; i < count; ++i)
                 {
-                    m_archetypeStorage->AddEntity(outEntities[i]);
+                    m_archetypeManager->AddEntity(outEntities[i]);
                 }
             }
             
@@ -149,8 +150,8 @@ namespace Astra
             if (count == 0 || outEntities.size() < count)
                 return;
             
-            m_entityPool->CreateBatch(count, outEntities.begin());
-            m_archetypeStorage->AddEntities<Components...>(outEntities.subspan(0, count), std::forward<Generator>(generator));
+            m_entityManager->CreateBatch(count, outEntities.begin());
+            m_archetypeManager->AddEntities<Components...>(outEntities.subspan(0, count), std::forward<Generator>(generator));
             
             if (m_signalManager.IsSignalEnabled(Signal::EntityCreated))
             {
@@ -171,14 +172,14 @@ namespace Astra
 
         void DestroyEntity(Entity entity)
         {
-            if (!m_entityPool->IsValid(entity))
+            if (!m_entityManager->IsValid(entity))
                 return;
             
             m_signalManager.Emit<Events::EntityDestroyed>(entity);
             
-            m_archetypeStorage->RemoveEntity(entity);
+            m_archetypeManager->RemoveEntity(entity);
             m_relationshipGraph.OnEntityDestroyed(entity);
-            m_entityPool->Destroy(entity);
+            m_entityManager->Destroy(entity);
         }
         
         void DestroyEntities(std::span<Entity> entities)
@@ -193,7 +194,7 @@ namespace Astra
             
             for (Entity entity : entities)
             {
-                if (m_entityPool->IsValid(entity))
+                if (m_entityManager->IsValid(entity))
                 {
                     validEntities.push_back(entity);
                 }
@@ -210,7 +211,7 @@ namespace Astra
                 }
             }
                 
-            m_archetypeStorage->RemoveEntities(validEntities);
+            m_archetypeManager->RemoveEntities(validEntities);
             
             for (Entity entity : validEntities)
             {
@@ -219,22 +220,22 @@ namespace Astra
             
             for (Entity entity : validEntities)
             {
-                m_entityPool->Destroy(entity);
+                m_entityManager->Destroy(entity);
             }
         }
 
         ASTRA_NODISCARD bool IsValid(Entity entity) const noexcept
         {
-            return m_entityPool->IsValid(entity);
+            return m_entityManager->IsValid(entity);
         }
 
         template<Component T, typename... Args>
         void AddComponent(Entity entity, Args&&... args)
         {
-            if (!m_entityPool->IsValid(entity))
+            if (!m_entityManager->IsValid(entity))
                 return;
                 
-            T* component = m_archetypeStorage->AddComponent<T>(entity, std::forward<Args>(args)...);
+            T* component = m_archetypeManager->AddComponent<T>(entity, std::forward<Args>(args)...);
             
             if (component)
             {
@@ -245,11 +246,11 @@ namespace Astra
         template<Component T>
         bool RemoveComponent(Entity entity)
         {
-            if (!m_entityPool->IsValid(entity))
+            if (!m_entityManager->IsValid(entity))
                 return false;
             
-            T* component = m_archetypeStorage->GetComponent<T>(entity);
-            bool removed = m_archetypeStorage->RemoveComponent<T>(entity);
+            T* component = m_archetypeManager->GetComponent<T>(entity);
+            bool removed = m_archetypeManager->RemoveComponent<T>(entity);
             
             if (removed && component)
             {
@@ -258,35 +259,129 @@ namespace Astra
             
             return removed;
         }
+        
+        template<Component T, typename... Args>
+        void AddComponents(std::span<Entity> entities, Args&&... args)
+        {
+            if (entities.empty())
+                return;
+            
+            // Filter out invalid entities
+            SmallVector<Entity, 256> validEntities;
+            validEntities.reserve(entities.size());
+            
+            for (Entity entity : entities)
+            {
+                if (m_entityManager->IsValid(entity))
+                {
+                    validEntities.push_back(entity);
+                }
+            }
+            
+            if (validEntities.empty())
+                return;
+            
+            // Batch add components
+            m_archetypeManager->AddComponents<T>(validEntities, std::forward<Args>(args)...);
+            
+            // Emit signals if enabled
+            if (m_signalManager.IsSignalEnabled(Signal::ComponentAdded))
+            {
+                for (Entity entity : validEntities)
+                {
+                    T* component = m_archetypeManager->GetComponent<T>(entity);
+                    if (component)
+                    {
+                        m_signalManager.Emit<Events::ComponentAdded>(entity, TypeID<T>::Value(), component);
+                    }
+                }
+            }
+        }
+        
+        template<Component T>
+        size_t RemoveComponents(std::span<Entity> entities)
+        {
+            if (entities.empty())
+                return 0;
+            
+            // Filter out invalid entities and collect components for signals
+            SmallVector<Entity, 256> validEntities;
+            SmallVector<T*, 256> componentsToRemove;
+            validEntities.reserve(entities.size());
+            
+            if (m_signalManager.IsSignalEnabled(Signal::ComponentRemoved))
+            {
+                componentsToRemove.reserve(entities.size());
+                for (Entity entity : entities)
+                {
+                    if (m_entityManager->IsValid(entity))
+                    {
+                        T* component = m_archetypeManager->GetComponent<T>(entity);
+                        if (component)
+                        {
+                            validEntities.push_back(entity);
+                            componentsToRemove.push_back(component);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                for (Entity entity : entities)
+                {
+                    if (m_entityManager->IsValid(entity))
+                    {
+                        validEntities.push_back(entity);
+                    }
+                }
+            }
+            
+            if (validEntities.empty())
+                return 0;
+            
+            // Batch remove components
+            size_t removedCount = m_archetypeManager->RemoveComponents<T>(validEntities);
+            
+            // Emit signals if enabled
+            if (m_signalManager.IsSignalEnabled(Signal::ComponentRemoved))
+            {
+                for (size_t i = 0; i < removedCount && i < componentsToRemove.size(); ++i)
+                {
+                    m_signalManager.Emit<Events::ComponentRemoved>(validEntities[i], TypeID<T>::Value(), componentsToRemove[i]);
+                }
+            }
+            
+            return removedCount;
+        }
 
         template<Component T>
         ASTRA_NODISCARD T* GetComponent(Entity entity)
         {
-            if (!m_entityPool->IsValid(entity))
+            if (!m_entityManager->IsValid(entity))
                 return nullptr;
-            return m_archetypeStorage->GetComponent<T>(entity);
+            return m_archetypeManager->GetComponent<T>(entity);
         }
         
         template<Component T>
         ASTRA_NODISCARD const T* GetComponent(Entity entity) const
         {
-            if (!m_entityPool->IsValid(entity))
+            if (!m_entityManager->IsValid(entity))
                 return nullptr;
-            return m_archetypeStorage->GetComponent<T>(entity);
+            return m_archetypeManager->GetComponent<T>(entity);
         }
         
         template<Component T>
         ASTRA_NODISCARD bool HasComponent(Entity entity) const
         {
-            if (!m_entityPool->IsValid(entity))
+            if (!m_entityManager->IsValid(entity))
                 return false;
-            return m_archetypeStorage->HasComponent<T>(entity);
+            return m_archetypeManager->HasComponent<T>(entity);
         }
 
         template<ValidQueryArg... QueryArgs>
         ASTRA_NODISCARD auto CreateView()
         {
-            return View<QueryArgs...>(m_archetypeStorage);
+            return View<QueryArgs...>(m_archetypeManager);
         }
         
         void Clear()
@@ -297,12 +392,12 @@ namespace Astra
                 // For now, we skip signals as Clear() is typically used for bulk cleanup
             }
             
-            auto componentRegistry = m_archetypeStorage->GetComponentRegistry();
-            m_archetypeStorage = std::make_shared<ArchetypeStorage>(std::move(componentRegistry));
+            auto componentRegistry = m_archetypeManager->GetComponentRegistry();
+            m_archetypeManager = std::make_shared<ArchetypeManager>(std::move(componentRegistry));
 
             m_relationshipGraph.Clear();
             
-            m_entityPool->Clear();
+            m_entityManager->Clear();
             
             // Note: We don't clear signal handlers here as they may still be valid
             // for future entities. Users can manually clear handlers if needed.
@@ -310,7 +405,7 @@ namespace Astra
 
         ASTRA_NODISCARD std::size_t Size() const noexcept
         {
-            return m_entityPool->Size();
+            return m_entityManager->Size();
         }
 
         ASTRA_NODISCARD bool IsEmpty() const noexcept
@@ -318,15 +413,15 @@ namespace Astra
             return Size() == 0;
         }
         
-        ASTRA_NODISCARD const ArchetypeStorage& GetArchetypeStorage() const { return *m_archetypeStorage; }
-        ASTRA_NODISCARD ArchetypeStorage& GetArchetypeStorage() { return *m_archetypeStorage; }
+        ASTRA_NODISCARD const ArchetypeManager& GetArchetypeManager() const { return *m_archetypeManager; }
+        ASTRA_NODISCARD ArchetypeManager& GetArchetypeManager() { return *m_archetypeManager; }
 
-        std::shared_ptr<ComponentRegistry> GetComponentRegistry() const { return m_archetypeStorage->GetComponentRegistry(); }
+        std::shared_ptr<ComponentRegistry> GetComponentRegistry() const { return m_archetypeManager->GetComponentRegistry(); }
         
         // ====================== Archetype API ======================
         
-        // Re-export types from ArchetypeStorage for convenience
-        using ArchetypeInfo = ArchetypeStorage::ArchetypeInfo;
+        // Re-export types from ArchetypeManager for convenience
+        using ArchetypeInfo = ArchetypeManager::ArchetypeInfo;
         
         /**
          * Options for controlling defragmentation behavior
@@ -402,7 +497,7 @@ namespace Astra
             result.fragmentationBefore = GetFragmentationLevel();
             
             size_t totalEntitiesMoved = 0;
-            auto archetypes = m_archetypeStorage->GetAllArchetypes();
+            auto archetypes = m_archetypeManager->GetAllArchetypes();
             
             // Step 1: Defragment chunks within archetypes
             if (options.defragmentChunks)
@@ -428,10 +523,10 @@ namespace Astra
                     // Perform chunk coalescing
                     auto [chunksFreed, movedEntities] = arch->CoalesceChunks();
                     
-                    // Update entity locations in ArchetypeStorage
+                    // Update entity locations in ArchetypeManager
                     for (const auto& [entity, newLocation] : movedEntities)
                     {
-                        m_archetypeStorage->SetEntityLocation(entity, arch, newLocation);
+                        m_archetypeManager->SetEntityLocation(entity, arch, newLocation);
                     }
                     
                     result.chunksRemoved += chunksFreed;
@@ -454,10 +549,10 @@ namespace Astra
             if (!options.incremental || totalEntitiesMoved < options.maxEntitiesToMove)
             {
                 // Update metrics before cleanup
-                m_archetypeStorage->UpdateArchetypeMetrics();
+                m_archetypeManager->UpdateArchetypeMetrics();
                 
                 // Build cleanup options from our defragmentation options
-                ArchetypeStorage::CleanupOptions cleanupOpts;
+                ArchetypeManager::CleanupOptions cleanupOpts;
                 cleanupOpts.minEmptyDuration = options.minEmptyDuration;
                 cleanupOpts.minArchetypesToKeep = options.minArchetypesToKeep;
                 cleanupOpts.maxArchetypesToRemove = options.maxArchetypesToRemove;
@@ -469,7 +564,7 @@ namespace Astra
                 }
                 
                 // Use the existing implementation which handles all the complex removal logic
-                result.archetypesRemoved = m_archetypeStorage->CleanupEmptyArchetypes(cleanupOpts);
+                result.archetypesRemoved = m_archetypeManager->CleanupEmptyArchetypes(cleanupOpts);
             }
             
             // Calculate final fragmentation
@@ -484,7 +579,7 @@ namespace Astra
          */
         ASTRA_NODISCARD std::vector<ArchetypeInfo> GetArchetypeStats() const
         {
-            return m_archetypeStorage->GetArchetypeStats();
+            return m_archetypeManager->GetArchetypeStats();
         }
         
         /**
@@ -492,7 +587,7 @@ namespace Astra
          */
         ASTRA_NODISCARD size_t GetArchetypeCount() const
         {
-            return m_archetypeStorage->GetArchetypeCount();
+            return m_archetypeManager->GetArchetypeCount();
         }
         
         /**
@@ -500,7 +595,7 @@ namespace Astra
          */
         ASTRA_NODISCARD size_t GetArchetypeMemoryUsage() const
         {
-            return m_archetypeStorage->GetArchetypeMemoryUsage();
+            return m_archetypeManager->GetArchetypeMemoryUsage();
         }
         
         /**
@@ -519,7 +614,7 @@ namespace Astra
         template<Component... Components>
         ASTRA_NODISCARD Archetype* FindArchetype() const
         {
-            return m_archetypeStorage->FindArchetype<Components...>();
+            return m_archetypeManager->FindArchetype<Components...>();
         }
         
         /**
@@ -531,7 +626,7 @@ namespace Astra
          */
         ASTRA_NODISCARD Archetype* FindArchetype(const ComponentMask& mask) const
         {
-            return m_archetypeStorage->FindArchetype(mask);
+            return m_archetypeManager->FindArchetype(mask);
         }
         
         /**
@@ -545,7 +640,7 @@ namespace Astra
          */
         ASTRA_NODISCARD auto GetAllArchetypes()
         {
-            return m_archetypeStorage->GetAllArchetypes();
+            return m_archetypeManager->GetAllArchetypes();
         }
         
         // ====================== Relationship API ======================
@@ -553,7 +648,7 @@ namespace Astra
         template<typename... QueryArgs>
         ASTRA_NODISCARD Relations<QueryArgs...> GetRelations(Entity entity) const
         {
-            return Relations<QueryArgs...>(m_archetypeStorage, m_entityPool, entity, &m_relationshipGraph);
+            return Relations<QueryArgs...>(m_archetypeManager, m_entityManager, entity, &m_relationshipGraph);
         }
         
         /**
@@ -564,7 +659,7 @@ namespace Astra
          */
         void SetParent(Entity child, Entity parent)
         {
-            if (m_entityPool->IsValid(child) && m_entityPool->IsValid(parent))
+            if (m_entityManager->IsValid(child) && m_entityManager->IsValid(parent))
             {
                 m_relationshipGraph.SetParent(child, parent);
                 
@@ -580,7 +675,7 @@ namespace Astra
          */
         void RemoveParent(Entity child)
         {
-            if (m_entityPool->IsValid(child))
+            if (m_entityManager->IsValid(child))
             {
                 // Get current parent before removal for signal
                 Entity parent = m_relationshipGraph.GetParent(child);
@@ -602,7 +697,7 @@ namespace Astra
          */
         void AddLink(Entity a, Entity b)
         {
-            if (m_entityPool->IsValid(a) && m_entityPool->IsValid(b))
+            if (m_entityManager->IsValid(a) && m_entityManager->IsValid(b))
             {
                 m_relationshipGraph.AddLink(a, b);
                 
@@ -619,7 +714,7 @@ namespace Astra
          */
         void RemoveLink(Entity a, Entity b)
         {
-            if (m_entityPool->IsValid(a) && m_entityPool->IsValid(b))
+            if (m_entityManager->IsValid(a) && m_entityManager->IsValid(b))
             {
                 m_relationshipGraph.RemoveLink(a, b);
                 
@@ -733,14 +828,14 @@ namespace Astra
             
             // Write header
             BinaryHeader header;
-            header.entityCount = static_cast<uint32_t>(m_entityPool->Size());
-            header.archetypeCount = static_cast<uint32_t>(m_archetypeStorage->GetArchetypeCount());
+            header.entityCount = static_cast<uint32_t>(m_entityManager->Size());
+            header.archetypeCount = static_cast<uint32_t>(m_archetypeManager->GetArchetypeCount());
             
             writer.WriteHeader(header);
             
             // Serialize components
-            m_entityPool->Serialize(writer);
-            m_archetypeStorage->Serialize(writer);
+            m_entityManager->Serialize(writer);
+            m_archetypeManager->Serialize(writer);
             m_relationshipGraph.Serialize(writer);
             
             // Finalize with checksum
@@ -769,14 +864,14 @@ namespace Astra
             
             // Write header
             BinaryHeader header;
-            header.entityCount = static_cast<uint32_t>(m_entityPool->Size());
-            header.archetypeCount = static_cast<uint32_t>(m_archetypeStorage->GetArchetypeCount());
+            header.entityCount = static_cast<uint32_t>(m_entityManager->Size());
+            header.archetypeCount = static_cast<uint32_t>(m_archetypeManager->GetArchetypeCount());
             
             writer.WriteHeader(header);
             
             // Serialize components
-            m_entityPool->Serialize(writer);
-            m_archetypeStorage->Serialize(writer);
+            m_entityManager->Serialize(writer);
+            m_archetypeManager->Serialize(writer);
             m_relationshipGraph.Serialize(writer);
             
             // Finalize with checksum
@@ -822,7 +917,7 @@ namespace Astra
          */
         ASTRA_NODISCARD float GetFragmentationLevel() const
         {
-            auto archetypes = m_archetypeStorage->GetAllArchetypes();
+            auto archetypes = m_archetypeManager->GetAllArchetypes();
             if (archetypes.empty()) return 0.0f;
             
             size_t totalEntities = 0;
@@ -865,22 +960,22 @@ namespace Astra
                 return Result<std::unique_ptr<Registry>, SerializationError>::Err(*headerResult.GetError());
             }
             
-            // Deserialize EntityPool
-            auto poolResult = EntityPool::Deserialize(reader);
-            if (poolResult.IsErr())
+            // Deserialize EntityManager
+            auto managerResult = EntityManager::Deserialize(reader);
+            if (managerResult.IsErr())
             {
-                return Result<std::unique_ptr<Registry>, SerializationError>::Err(*poolResult.GetError());
+                return Result<std::unique_ptr<Registry>, SerializationError>::Err(*managerResult.GetError());
             }
             
             // Create new registry instance with the provided component registry
             auto registry = std::make_unique<Registry>(componentRegistry);
             
-            // Set the entity pool (convert unique_ptr to shared_ptr)
-            registry->m_entityPool = std::move(*poolResult.GetValue());
+            // Set the entity manager (convert unique_ptr to shared_ptr)
+            registry->m_entityManager = std::move(*managerResult.GetValue());
             
-            // Create new ArchetypeStorage with the component registry and deserialize into it
-            registry->m_archetypeStorage = std::make_shared<ArchetypeStorage>(componentRegistry);
-            if (!registry->m_archetypeStorage->Deserialize(reader))
+            // Create new ArchetypeManager with the component registry and deserialize into it
+            registry->m_archetypeManager = std::make_shared<ArchetypeManager>(componentRegistry);
+            if (!registry->m_archetypeManager->Deserialize(reader))
             {
                 return Result<std::unique_ptr<Registry>, SerializationError>::Err(SerializationError::CorruptedData);
             }
@@ -903,8 +998,8 @@ namespace Astra
             return Result<std::unique_ptr<Registry>, SerializationError>::Ok(std::move(registry));
         }
         
-        std::shared_ptr<EntityPool> m_entityPool;
-        std::shared_ptr<ArchetypeStorage> m_archetypeStorage;
+        std::shared_ptr<EntityManager> m_entityManager;
+        std::shared_ptr<ArchetypeManager> m_archetypeManager;
         RelationshipGraph m_relationshipGraph;
         SignalManager m_signalManager;
     };

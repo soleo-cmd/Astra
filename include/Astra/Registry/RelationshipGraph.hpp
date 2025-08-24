@@ -1,8 +1,9 @@
 #pragma once
 
+#include <unordered_map>
+
 #include "../Core/Base.hpp"
 #include "../Core/Result.hpp"
-#include "../Container/FlatMap.hpp"
 #include "../Container/SmallVector.hpp"
 #include "../Entity/Entity.hpp"
 #include "../Serialization/BinaryWriter.hpp"
@@ -61,11 +62,11 @@ namespace Astra
          */
         void RemoveParent(Entity child)
         {
-            auto it = m_parents.Find(child);
+            auto it = m_parents.find(child);
             if (it != m_parents.end())
             {
                 Entity parent = it->second;
-                m_parents.Erase(it);
+                m_parents.erase(it);
                 
                 // Remove from parent's children list
                 auto& children = m_children[parent];
@@ -74,7 +75,7 @@ namespace Astra
                 // Clean up empty children container
                 if (children.empty())
                 {
-                    m_children.Erase(parent);
+                    m_children.erase(parent);
                 }
             }
         }
@@ -86,7 +87,7 @@ namespace Astra
          */
         Entity GetParent(Entity child) const
         {
-            auto it = m_parents.Find(child);
+            auto it = m_parents.find(child);
             return (it != m_parents.end()) ? it->second : Entity::Invalid();
         }
         
@@ -97,7 +98,7 @@ namespace Astra
          */
         bool HasParent(Entity child) const
         {
-            return m_parents.Contains(child);
+            return m_parents.find(child) != m_parents.end();
         }
         
         /**
@@ -107,7 +108,7 @@ namespace Astra
          */
         const ChildrenContainer& GetChildren(Entity parent) const
         {
-            auto it = m_children.Find(parent);
+            auto it = m_children.find(parent);
             return (it != m_children.end()) ? it->second : s_emptyChildren;
         }
         
@@ -118,7 +119,7 @@ namespace Astra
          */
         bool HasChildren(Entity parent) const
         {
-            auto it = m_children.Find(parent);
+            auto it = m_children.find(parent);
             return it != m_children.end() && !it->second.empty();
         }
         
@@ -164,7 +165,7 @@ namespace Astra
         {
             auto RemoveFromLinks = [this](Entity from, Entity to)
             {
-                auto it = m_links.Find(from);
+                auto it = m_links.find(from);
                 if (it != m_links.end())
                 {
                     auto& links = it->second;
@@ -172,7 +173,7 @@ namespace Astra
                     
                     if (links.empty())
                     {
-                        m_links.Erase(it);
+                        m_links.erase(it);
                     }
                 }
             };
@@ -188,7 +189,7 @@ namespace Astra
          */
         const LinksContainer& GetLinks(Entity entity) const
         {
-            auto it = m_links.Find(entity);
+            auto it = m_links.find(entity);
             return (it != m_links.end()) ? it->second : s_emptyLinks;
         }
         
@@ -200,7 +201,7 @@ namespace Astra
          */
         bool AreLinked(Entity a, Entity b) const
         {
-            auto it = m_links.Find(a);
+            auto it = m_links.find(a);
             if (it != m_links.end())
             {
                 const auto& links = it->second;
@@ -216,7 +217,7 @@ namespace Astra
          */
         bool HasLinks(Entity entity) const
         {
-            auto it = m_links.Find(entity);
+            auto it = m_links.find(entity);
             return it != m_links.end() && !it->second.empty();
         }
         
@@ -238,25 +239,25 @@ namespace Astra
             RemoveParent(entity);
             
             // Remove all children (they become orphaned)
-            auto childrenIt = m_children.Find(entity);
+            auto childrenIt = m_children.find(entity);
             if (childrenIt != m_children.end())
             {
                 // Clear parent references for all children
                 for (Entity child : childrenIt->second)
                 {
-                    m_parents.Erase(child);
+                    m_parents.erase(child);
                 }
-                m_children.Erase(childrenIt);
+                m_children.erase(childrenIt);
             }
             
             // Remove all links
-            auto linksIt = m_links.Find(entity);
+            auto linksIt = m_links.find(entity);
             if (linksIt != m_links.end())
             {
                 // Remove this entity from all linked entities
                 for (Entity linked : linksIt->second)
                 {
-                    auto otherIt = m_links.Find(linked);
+                    auto otherIt = m_links.find(linked);
                     if (otherIt != m_links.end())
                     {
                         auto& otherLinks = otherIt->second;
@@ -264,11 +265,11 @@ namespace Astra
                         
                         if (otherLinks.empty())
                         {
-                            m_links.Erase(otherIt);
+                            m_links.erase(otherIt);
                         }
                     }
                 }
-                m_links.Erase(linksIt);
+                m_links.erase(linksIt);
             }
         }
         
@@ -278,28 +279,28 @@ namespace Astra
          * @brief Get the total number of parent-child relationships
          * @return Number of entities that have a parent
          */
-        size_t GetParentChildCount() const { return m_parents.Size(); }
+        size_t GetParentChildCount() const { return m_parents.size(); }
         
         /**
          * @brief Get the total number of entities with children
          * @return Number of entities that have at least one child
          */
-        size_t GetParentCount() const { return m_children.Size(); }
+        size_t GetParentCount() const { return m_children.size(); }
         
         /**
          * @brief Get the total number of entities with links
          * @return Number of entities that have at least one link
          */
-        size_t GetLinkedEntityCount() const { return m_links.Size(); }
+        size_t GetLinkedEntityCount() const { return m_links.size(); }
         
         /**
          * @brief Clear all relationships
          */
         void Clear()
         {
-            m_parents.Clear();
-            m_children.Clear();
-            m_links.Clear();
+            m_parents.clear();
+            m_children.clear();
+            m_links.clear();
         }
         
         // Serialization
@@ -312,7 +313,7 @@ namespace Astra
         {
             // Write parent-child relationships
             // Write parent count
-            uint32_t parentCount = static_cast<uint32_t>(m_parents.Size());
+            uint32_t parentCount = static_cast<uint32_t>(m_parents.size());
             writer(parentCount);
             
             // Write each parent-child pair
@@ -324,7 +325,7 @@ namespace Astra
             
             // Write children mappings
             // Note: We can reconstruct this from parents, but storing it is faster
-            uint32_t parentWithChildrenCount = static_cast<uint32_t>(m_children.Size());
+            uint32_t parentWithChildrenCount = static_cast<uint32_t>(m_children.size());
             writer(parentWithChildrenCount);
             
             for (const auto& [parent, children] : m_children)
@@ -340,7 +341,7 @@ namespace Astra
             }
             
             // Write link relationships
-            uint32_t linkedEntityCount = static_cast<uint32_t>(m_links.Size());
+            uint32_t linkedEntityCount = static_cast<uint32_t>(m_links.size());
             writer(linkedEntityCount);
             
             for (const auto& [entity, links] : m_links)
@@ -374,11 +375,11 @@ namespace Astra
                 return Result<RelationshipGraph, SerializationError>::Err(reader.GetError());
             }
             
-            graph.m_parents.Reserve(parentCount);
+            graph.m_parents.reserve(parentCount);
             
             for (uint32_t i = 0; i < parentCount; ++i)
             {
-                Entity::Type childValue, parentValue;
+                Entity::IDType childValue, parentValue;
                 reader(childValue);
                 reader(parentValue);
                 
@@ -401,11 +402,11 @@ namespace Astra
                 return Result<RelationshipGraph, SerializationError>::Err(reader.GetError());
             }
             
-            graph.m_children.Reserve(parentWithChildrenCount);
+            graph.m_children.reserve(parentWithChildrenCount);
             
             for (uint32_t i = 0; i < parentWithChildrenCount; ++i)
             {
-                Entity::Type parentValue;
+                Entity::IDType parentValue;
                 reader(parentValue);
                 
                 uint32_t childCount;
@@ -422,7 +423,7 @@ namespace Astra
                 
                 for (uint32_t j = 0; j < childCount; ++j)
                 {
-                    Entity::Type childValue;
+                    Entity::IDType childValue;
                     reader(childValue);
                     
                     if (reader.HasError())
@@ -443,11 +444,11 @@ namespace Astra
                 return Result<RelationshipGraph, SerializationError>::Err(reader.GetError());
             }
             
-            graph.m_links.Reserve(linkedEntityCount);
+            graph.m_links.reserve(linkedEntityCount);
             
             for (uint32_t i = 0; i < linkedEntityCount; ++i)
             {
-                Entity::Type entityValue;
+                Entity::IDType entityValue;
                 reader(entityValue);
                 
                 uint32_t linkCount;
@@ -464,7 +465,7 @@ namespace Astra
                 
                 for (uint32_t j = 0; j < linkCount; ++j)
                 {
-                    Entity::Type linkedValue;
+                    Entity::IDType linkedValue;
                     reader(linkedValue);
                     
                     if (reader.HasError())
@@ -481,11 +482,11 @@ namespace Astra
 
     private:
         // Parent-child relationships
-        FlatMap<Entity, Entity> m_parents;                    // child -> parent
-        FlatMap<Entity, ChildrenContainer> m_children;       // parent -> children
+        std::unordered_map<Entity, Entity> m_parents;                    // child -> parent
+        std::unordered_map<Entity, ChildrenContainer> m_children;       // parent -> children
         
         // Link relationships
-        FlatMap<Entity, LinksContainer> m_links;             // entity -> linked entities
+        std::unordered_map<Entity, LinksContainer> m_links;             // entity -> linked entities
         
         // Empty containers for const references
         static inline const ChildrenContainer s_emptyChildren{};

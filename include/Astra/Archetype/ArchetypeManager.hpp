@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -9,6 +10,7 @@
 #include <ranges>
 #include <span>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -19,15 +21,24 @@
 #include "../Container/SmallVector.hpp"
 #include "../Core/TypeID.hpp"
 #include "../Entity/Entity.hpp"
-#include "ArchetypeChunkPool.hpp"
 #include "../Serialization/BinaryReader.hpp"
 #include "../Serialization/BinaryWriter.hpp"
 #include "Archetype.hpp"
+#include "ArchetypeChunkPool.hpp"
+#include "ArchetypeGraph.hpp"
 
 namespace Astra
 {
-    class ArchetypeStorage
+    // Forward declaration for friend class
+    template<typename... QueryArgs>
+    class View;
+    
+    class ArchetypeManager
     {
+        // Allow View to access versioning methods
+        template<typename... QueryArgs>
+        friend class View;
+        
     public:
         struct EntityRecord
         {
@@ -71,7 +82,7 @@ namespace Astra
         };
         
         // Default constructor creates new component registry
-        explicit ArchetypeStorage(const ArchetypeChunkPool::Config& poolConfig = {}) 
+        explicit ArchetypeManager(const ArchetypeChunkPool::Config& poolConfig = {}) 
             : m_chunkPool(poolConfig)
             , m_componentRegistry(std::make_shared<ComponentRegistry>())
         {
@@ -79,7 +90,7 @@ namespace Astra
         }
         
         // Constructor for sharing component registry
-        ArchetypeStorage(std::shared_ptr<ComponentRegistry> registry, const ArchetypeChunkPool::Config& poolConfig = {})
+        ArchetypeManager(std::shared_ptr<ComponentRegistry> registry, const ArchetypeChunkPool::Config& poolConfig = {})
             : m_chunkPool(poolConfig)
             , m_componentRegistry(std::move(registry))
         {
@@ -133,7 +144,7 @@ namespace Astra
         
         /**
          * Add entity to storage (in root archetype)
-         * Entity should be created by EntityPool
+         * Entity should be created by EntityManager
          */
         void AddEntity(Entity entity)
         {
@@ -171,7 +182,7 @@ namespace Astra
             }
 
             // Batch update entity map - reserve space first for efficiency
-            m_entityMap.Reserve(m_entityMap.Size() + locations.size());
+            m_entityMap.reserve(m_entityMap.size() + locations.size());
             for (size_t i = 0; i < locations.size(); ++i)
             {
                 m_entityMap[entities[i]] = EntityRecord{archetype, locations[i]};
@@ -193,11 +204,11 @@ namespace Astra
         
         /**
          * Remove entity from storage
-         * Entity destruction should be handled by EntityPool
+         * Entity destruction should be handled by EntityManager
          */
         void RemoveEntity(Entity entity)
         {
-            auto it = m_entityMap.Find(entity);
+            auto it = m_entityMap.find(entity);
             if (it == m_entityMap.end()) ASTRA_UNLIKELY return;
             
             EntityRecord& loc = it->second;
@@ -206,12 +217,12 @@ namespace Astra
             if (auto movedEntity = loc.archetype->RemoveEntity(loc.location)) ASTRA_LIKELY
             {
                 // Update location of moved entity
-                auto movedIt = m_entityMap.Find(*movedEntity);
+                auto movedIt = m_entityMap.find(*movedEntity);
                 ASTRA_ASSERT(movedIt != m_entityMap.end(), "Moved entity not found in map");
                 movedIt->second.location = loc.location;
             }
             
-            m_entityMap.Erase(it);
+            m_entityMap.erase(it);
             UpdateArchetypeMetrics(loc.archetype);
         }
         
@@ -224,7 +235,7 @@ namespace Astra
             // Ensure component is registered
             m_componentRegistry->RegisterComponent<T>();
             
-            auto it = m_entityMap.Find(entity);
+            auto it = m_entityMap.find(entity);
             if (it == m_entityMap.end()) ASTRA_UNLIKELY return nullptr;
             
             EntityRecord& oldLoc = it->second;
@@ -262,7 +273,7 @@ namespace Astra
             
             // Component validity is ensured at compile time through the type system
             
-            auto it = m_entityMap.Find(entity);
+            auto it = m_entityMap.find(entity);
             if (it == m_entityMap.end()) ASTRA_UNLIKELY return false;
             
             EntityRecord& oldLoc = it->second;
@@ -299,7 +310,7 @@ namespace Astra
             
             // Component validity is ensured at compile time
             
-            auto it = m_entityMap.Find(entity);
+            auto it = m_entityMap.find(entity);
             if (it == m_entityMap.end()) ASTRA_UNLIKELY return nullptr;
             
             EntityRecord& loc = it->second;
@@ -312,7 +323,7 @@ namespace Astra
         template<Component T>
         ASTRA_NODISCARD bool HasComponent(Entity entity) const
         {
-            auto it = m_entityMap.Find(entity);
+            auto it = m_entityMap.find(entity);
             if (it == m_entityMap.end()) ASTRA_UNLIKELY return false;
             
             const EntityRecord& loc = it->second;
@@ -321,7 +332,7 @@ namespace Astra
 
         ASTRA_NODISCARD std::pair<Archetype*, EntityLocation> GetEntityLocation(Entity entity) const
         {
-            auto it = m_entityMap.Find(entity);
+            auto it = m_entityMap.find(entity);
             if (it == m_entityMap.end()) ASTRA_UNLIKELY 
                 return {nullptr, EntityLocation{}};
             
@@ -357,36 +368,65 @@ namespace Astra
         
         /**
          * Add component to multiple entities in batch (optimized)
+         * Uses the same optimized pattern as AddEntities for maximum performance
          */
         template<Component T, typename... Args>
         void AddComponents(std::span<Entity> entities, Args&&... args)
         {
+            if (entities.empty()) return;
+            
             m_componentRegistry->RegisterComponent<T>();
             ComponentID componentId = TypeID<T>::Value();
             
-            // Group entities by current archetype
-            FlatMap<Archetype*, SmallVector<std::pair<Entity, EntityLocation>, 8>> batches;
+            // Group entities by current archetype for batch processing
+            auto batches = GroupEntitiesByArchetype(entities, 
+                [componentId](Archetype* arch) { return !arch->GetMask().Test(componentId); });
             
-            for (Entity entity : entities)
-            {
-                auto it = m_entityMap.Find(entity);
-                if (it == m_entityMap.end()) ASTRA_UNLIKELY continue;
-                
-                EntityRecord& loc = it->second;
-                if (!loc.archetype->GetMask().Test(componentId)) ASTRA_LIKELY
-                {
-                    batches[loc.archetype].emplace_back(entity, loc.location);
-                }
-            }
-            
-            // Process each batch
+            // Process each archetype group
             for (auto& [srcArchetype, entityBatch] : batches)
             {
+                if (entityBatch.empty()) continue;
+                
                 Archetype* dstArchetype = GetArchetypeWithAdded(srcArchetype, componentId);
                 
-                // Batch move all entities
-                MoveEntitiesWithComponent<T>(srcArchetype, dstArchetype, entityBatch, std::forward<Args>(args)...);
+                // Execute optimized batch move with component addition
+                BatchMoveEntitiesWithComponent<T>(srcArchetype, dstArchetype, entityBatch, 
+                                                  std::forward<Args>(args)...);
             }
+        }
+        
+        /**
+         * Remove component from multiple entities in batch (optimized)
+         * Returns number of entities that had the component removed
+         */
+        template<Component T>
+        size_t RemoveComponents(std::span<Entity> entities)
+        {
+            if (entities.empty()) ASTRA_UNLIKELY
+                return 0;
+            
+            m_componentRegistry->RegisterComponent<T>();
+            ComponentID componentId = TypeID<T>::Value();
+            
+            // Group entities by current archetype for batch processing
+            auto batches = GroupEntitiesByArchetype(entities, 
+                [componentId](Archetype* arch) { return arch->GetMask().Test(componentId); });
+            
+            size_t removedCount = 0;
+            
+            // Process each archetype group
+            for (auto& [srcArchetype, entityBatch] : batches)
+            {
+                if (entityBatch.empty()) continue;
+                
+                Archetype* dstArchetype = GetArchetypeWithRemoved(srcArchetype, componentId);
+                
+                // Execute optimized batch move without component
+                BatchMoveEntitiesWithoutComponent(srcArchetype, dstArchetype, entityBatch);
+                removedCount += entityBatch.size();
+            }
+            
+            return removedCount;
         }
         
         /**
@@ -402,7 +442,7 @@ namespace Astra
             
             for (Entity entity : entities)
             {
-                auto it = m_entityMap.Find(entity);
+                auto it = m_entityMap.find(entity);
                 if (it == m_entityMap.end()) ASTRA_UNLIKELY continue;
                 
                 EntityRecord& loc = it->second;
@@ -425,7 +465,7 @@ namespace Astra
                 // Update entity locations for moved entities
                 for (const auto& [movedEntity, newEntityLocation] : movedEntities)
                 {
-                    auto movedIt = m_entityMap.Find(movedEntity);
+                    auto movedIt = m_entityMap.find(movedEntity);
                     if (movedIt != m_entityMap.end()) ASTRA_LIKELY
                     {
                         movedIt->second.location = newEntityLocation;
@@ -435,7 +475,7 @@ namespace Astra
                 // Remove entities from map
                 for (const auto& [entity, _] : entityBatch)
                 {
-                    m_entityMap.Erase(entity);
+                    m_entityMap.erase(entity);
                 }
                 
                 // Update metrics after batch removal
@@ -588,14 +628,14 @@ namespace Astra
         }
         
         /**
-         * Serialize ArchetypeStorage to binary format
+         * Serialize ArchetypeManager to binary format
          * Includes all archetypes and entity mappings
          */
         void Serialize(BinaryWriter& writer) const
         {
             // Write storage metadata
             writer(static_cast<uint32_t>(m_archetypes.size()));
-            writer(static_cast<uint32_t>(m_entityMap.Size()));
+            writer(static_cast<uint32_t>(m_entityMap.size()));
             
             // Write each archetype (skip root archetype at index 0)
             for (size_t i = 1; i < m_archetypes.size(); ++i)
@@ -637,7 +677,7 @@ namespace Astra
         }
         
         /**
-         * Deserialize ArchetypeStorage from binary format
+         * Deserialize ArchetypeManager from binary format
          * Returns false if deserialization fails
          */
         bool Deserialize(BinaryReader& reader)
@@ -648,7 +688,7 @@ namespace Astra
                 m_archetypes.pop_back();
             }
             m_archetypeMap.Clear();
-            m_entityMap.Clear();
+            m_entityMap.clear();
             
             // Read storage metadata
             uint32_t archetypeCount, entityCount;
@@ -659,7 +699,7 @@ namespace Astra
             
             // Reserve space
             m_archetypes.reserve(archetypeCount);
-            m_entityMap.Reserve(entityCount);
+            m_entityMap.reserve(entityCount);
             
             // Get all registered component descriptors
             std::vector<ComponentDescriptor> registryDescriptors;
@@ -762,16 +802,20 @@ namespace Astra
             
             ArchetypeEntry entry;
             entry.archetype = std::move(archetype);
+            entry.creationGeneration = ++m_generation;  // Assign generation
             // Don't call Update(0) here - let it track naturally
             m_archetypes.push_back(std::move(entry));
+            
+            // Increment structural change counter for fast path checking
+            m_structuralChangeCounter.fetch_add(1, std::memory_order_release);
 
             return ptr;
         }
 
         Archetype* GetArchetypeWithAdded(Archetype* from, ComponentID componentId)
         {
-            // Check edge cache in the archetype itself
-            if (Archetype* target = from->GetAddEdge(componentId)) ASTRA_LIKELY
+            // Check edge cache in the edge graph
+            if (Archetype* target = m_edgeGraph.GetAddEdge(from, componentId)) ASTRA_LIKELY
             {
                 return target;
             }
@@ -783,16 +827,16 @@ namespace Astra
             // Get or create archetype
             Archetype* to = GetOrCreateArchetype(newMask);
             
-            // Cache edge in the archetype
-            from->GetOrCreateAddEdge(componentId, to);
+            // Cache edge in the edge graph
+            m_edgeGraph.SetAddEdge(from, componentId, to);
             
             return to;
         }
         
         Archetype* GetArchetypeWithRemoved(Archetype* from, ComponentID componentId)
         {
-            // Check edge cache in the archetype itself
-            if (Archetype* target = from->GetRemoveEdge(componentId)) ASTRA_LIKELY
+            // Check edge cache in the edge graph
+            if (Archetype* target = m_edgeGraph.GetRemoveEdge(from, componentId)) ASTRA_LIKELY
             {
                 return target;
             }
@@ -804,10 +848,44 @@ namespace Astra
             // Get or create archetype
             Archetype* to = GetOrCreateArchetype(newMask);
             
-            // Cache edge in the archetype
-            from->GetOrCreateRemoveEdge(componentId, to);
+            // Cache edge in the edge graph
+            m_edgeGraph.SetRemoveEdge(from, componentId, to);
             
             return to;
+        }
+        
+        /**
+         * Get the current structural change counter for fast path checking
+         * This is incremented whenever archetypes are created or removed
+         */
+        ASTRA_NODISCARD uint32_t GetStructuralChangeCounter() const noexcept
+        {
+            return m_structuralChangeCounter.load(std::memory_order_acquire);
+        }
+        
+        /**
+         * Get the current generation number
+         */
+        ASTRA_NODISCARD uint32_t GetCurrentGeneration() const noexcept
+        {
+            return m_generation;
+        }
+        
+        /**
+         * Get archetypes created after a specific generation
+         * Used for incremental view updates
+         */
+        ASTRA_NODISCARD std::vector<Archetype*> GetArchetypesSince(uint32_t sinceGeneration) const
+        {
+            std::vector<Archetype*> result;
+            for (const auto& entry : m_archetypes)
+            {
+                if (entry.creationGeneration > sinceGeneration)
+                {
+                    result.push_back(entry.archetype.get());
+                }
+            }
+            return result;
         }
         
     private:
@@ -947,34 +1025,52 @@ namespace Astra
         }
         
         template<Component T, typename... Args>
-        void MoveEntitiesWithComponent(Archetype* srcArchetype, Archetype* dstArchetype, const SmallVector<std::pair<Entity, EntityLocation>, 8>& entities, Args&&... args)
+        void MoveEntitiesWithComponent(Archetype* srcArchetype, Archetype* dstArchetype, SmallVector<std::pair<Entity, EntityLocation>, 8>& entities, Args&&... args)
         {
-            SmallVector<std::pair<Entity, EntityLocation>, 8> sortedEntities = entities;
-            std::sort(sortedEntities.begin(), sortedEntities.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+            // Entities should already be sorted by caller for cache efficiency
+            if (entities.empty()) return;
             
-            for (auto [entity, srcEntityLocation] : sortedEntities)
+            // Move entities and components using the same pattern as regular AddComponent
+            // Let AddEntityNoConstruct handle chunk allocation internally
+            size_t processedCount = 0;
+            for (size_t i = 0; i < entities.size(); ++i)
             {
-                EntityLocation dstEntityLocation = dstArchetype->AddEntityNoConstruct(entity);
-                if (!dstEntityLocation.IsValid()) ASTRA_UNLIKELY
+                auto [entity, srcLocation] = entities[i];
+                
+                // Use AddEntityNoConstruct like the regular AddComponent does
+                EntityLocation dstLocation = dstArchetype->AddEntityNoConstruct(entity);
+                if (!dstLocation.IsValid()) ASTRA_UNLIKELY
                 {
-                    // Allocation failed - stop processing remaining entities
-                    // Already moved entities stay in new archetype
+                    // This shouldn't happen since we pre-allocated chunks, but be safe
                     break;
                 }
                 
-                // Note: Can't perfect forward in batch
-                ExecuteComponentMoveAndAdd<T>(dstEntityLocation, dstArchetype, srcEntityLocation, srcArchetype, args...);
+                // Move components and add the new one
+                ExecuteComponentMoveAndAdd<T>(dstLocation, dstArchetype, srcLocation, srcArchetype, args...);
                 
-                m_entityMap[entity] = {dstArchetype, dstEntityLocation};
+                // Update entity map
+                m_entityMap[entity] = {dstArchetype, dstLocation};
+                ++processedCount;
             }
             
-            // Remove all entities from source archetype
-            // Process in reverse to avoid invalidating indices
-            for (auto it = sortedEntities.rbegin(); it != sortedEntities.rend(); ++it)
+            // Update first non-full chunk index for destination
+            for (size_t idx = dstArchetype->m_firstNonFullChunkIdx; idx < dstArchetype->m_chunks.size(); ++idx)
             {
-                if (auto movedEntity = srcArchetype->RemoveEntity(it->second)) ASTRA_LIKELY
+                if (!dstArchetype->m_chunks[idx]->IsFull())
                 {
-                    m_entityMap[*movedEntity].location = it->second;
+                    dstArchetype->m_firstNonFullChunkIdx = idx;
+                    break;
+                }
+            }
+            
+            // Remove processed entities from source archetype in reverse order
+            // Only remove the ones we actually moved
+            for (size_t i = processedCount; i > 0; --i)
+            {
+                auto& [entity, location] = entities[i - 1];
+                if (auto movedEntity = srcArchetype->RemoveEntity(location)) ASTRA_LIKELY
+                {
+                    m_entityMap[*movedEntity].location = location;
                 }
             }
             
@@ -983,6 +1079,154 @@ namespace Astra
         }
         
     private:
+        /**
+         * Group entities by their current archetype for batch processing
+         * @param entities Span of entities to group
+         * @param filter Predicate to filter entities (e.g., check if component exists)
+         * @return Map of archetypes to their entities and locations
+         */
+        template<typename Predicate>
+        FlatMap<Archetype*, SmallVector<std::pair<Entity, EntityLocation>, 8>> 
+        GroupEntitiesByArchetype(std::span<Entity> entities, Predicate&& filter)
+        {
+            FlatMap<Archetype*, SmallVector<std::pair<Entity, EntityLocation>, 8>> batches;
+            
+            for (Entity entity : entities)
+            {
+                auto it = m_entityMap.find(entity);
+                if (it == m_entityMap.end()) ASTRA_UNLIKELY continue;
+                
+                EntityRecord& loc = it->second;
+                if (filter(loc.archetype))
+                {
+                    batches[loc.archetype].emplace_back(entity, loc.location);
+                }
+            }
+            
+            return batches;
+        }
+        
+        /**
+         * Optimized batch move of entities with component addition
+         * Uses new batch infrastructure for maximum performance
+         */
+        template<Component T, typename... Args>
+        void BatchMoveEntitiesWithComponent(Archetype* srcArchetype, Archetype* dstArchetype,
+                                           SmallVector<std::pair<Entity, EntityLocation>, 8>& entityBatch,
+                                           Args&&... args)
+        {
+            // Check if already sorted (common case for batch-created entities)
+            bool needsSort = false;
+            for (size_t i = 1; i < entityBatch.size(); ++i)
+            {
+                if (entityBatch[i].second < entityBatch[i-1].second)
+                {
+                    needsSort = true;
+                    break;
+                }
+            }
+            
+            // Only sort if necessary
+            if (needsSort)
+            {
+                std::sort(entityBatch.begin(), entityBatch.end(), 
+                    [](const auto& a, const auto& b) { return a.second < b.second; });
+            }
+            
+            // Extract entities and source locations
+            SmallVector<Entity, 256> entitiesToAdd;
+            SmallVector<EntityLocation, 256> srcLocations;
+            entitiesToAdd.reserve(entityBatch.size());
+            srcLocations.reserve(entityBatch.size());
+            
+            for (const auto& [entity, location] : entityBatch)
+            {
+                entitiesToAdd.push_back(entity);
+                srcLocations.push_back(location);
+            }
+            
+            // Use new batch move infrastructure
+            std::vector<EntityLocation> newLocations = dstArchetype->BatchMoveEntitiesFrom(
+                entitiesToAdd, *srcArchetype, srcLocations);
+            
+            // Batch add the new component T
+            dstArchetype->BatchSetComponent<T>(newLocations, T{args...});
+            
+            // Batch update entity map
+            for (size_t i = 0; i < newLocations.size(); ++i)
+            {
+                m_entityMap[entityBatch[i].first] = {dstArchetype, newLocations[i]};
+            }
+            
+            // Batch remove from source (defer chunk cleanup to avoid invalidating locations)
+            auto movedEntities = srcArchetype->RemoveEntities(srcLocations, true);
+            
+            // Update locations of entities moved during removal
+            for (const auto& [movedEntity, newLocation] : movedEntities)
+            {
+                auto it = m_entityMap.find(movedEntity);
+                if (it != m_entityMap.end()) ASTRA_LIKELY
+                {
+                    it->second.location = newLocation;
+                }
+            }
+            
+            UpdateArchetypeMetrics(srcArchetype);
+            UpdateArchetypeMetrics(dstArchetype);
+        }
+        
+        /**
+         * Optimized batch move of entities with component removal
+         * Uses new batch infrastructure for maximum performance
+         */
+        void BatchMoveEntitiesWithoutComponent(Archetype* srcArchetype, Archetype* dstArchetype,
+                                              SmallVector<std::pair<Entity, EntityLocation>, 8>& entityBatch)
+        {
+            // Sort for cache-efficient access
+            std::sort(entityBatch.begin(), entityBatch.end(), 
+                [](const auto& a, const auto& b) { return a.second < b.second; });
+            
+            // Extract entities and source locations
+            SmallVector<Entity, 256> entitiesToAdd;
+            SmallVector<EntityLocation, 256> srcLocations;
+            entitiesToAdd.reserve(entityBatch.size());
+            srcLocations.reserve(entityBatch.size());
+            
+            for (const auto& [entity, location] : entityBatch)
+            {
+                entitiesToAdd.push_back(entity);
+                srcLocations.push_back(location);
+            }
+            
+            // Use new batch move infrastructure
+            std::vector<EntityLocation> newLocations = dstArchetype->BatchMoveEntitiesFrom(
+                entitiesToAdd, *srcArchetype, srcLocations);
+            
+            // Note: No need to set any component since we're removing one
+            
+            // Batch update entity map
+            for (size_t i = 0; i < newLocations.size(); ++i)
+            {
+                m_entityMap[entityBatch[i].first] = {dstArchetype, newLocations[i]};
+            }
+            
+            // Batch remove from source (defer chunk cleanup to avoid invalidating locations)
+            auto movedEntities = srcArchetype->RemoveEntities(srcLocations, true);
+            
+            // Update locations of entities moved during removal
+            for (const auto& [movedEntity, newLocation] : movedEntities)
+            {
+                auto it = m_entityMap.find(movedEntity);
+                if (it != m_entityMap.end()) ASTRA_LIKELY
+                {
+                    it->second.location = newLocation;
+                }
+            }
+            
+            UpdateArchetypeMetrics(srcArchetype);
+            UpdateArchetypeMetrics(dstArchetype);
+        }
+        
         void InitializeRootArchetype()
         {
             // Create root archetype (no components)
@@ -997,6 +1241,7 @@ namespace Astra
             
             ArchetypeEntry entry;
             entry.archetype = std::move(rootArchetype);
+            entry.creationGeneration = 0;  // Root archetype is generation 0
             // Metrics will be tracked when entities are added
             m_archetypes.push_back(std::move(entry));
         }
@@ -1007,15 +1252,21 @@ namespace Astra
         {
             std::unique_ptr<Archetype> archetype;
             ArchetypeMetrics metrics;
+            uint32_t creationGeneration;  // Generation when this archetype was created
         };
         
         ArchetypeChunkPool m_chunkPool;  // Pool owned by storage
         std::shared_ptr<ComponentRegistry> m_componentRegistry;  // Shared component registry
+        ArchetypeGraph m_edgeGraph;  // Manages archetype transition graph
         std::vector<ArchetypeEntry> m_archetypes;
         FlatMap<ComponentMask, Archetype*, BitmapHash<MAX_COMPONENTS>> m_archetypeMap;
-        FlatMap<Entity, EntityRecord> m_entityMap;
+        std::unordered_map<Entity, EntityRecord> m_entityMap;
         
         Archetype* m_rootArchetype = nullptr;
+        
+        // Versioning for incremental updates
+        std::atomic<uint32_t> m_structuralChangeCounter{0};  // Fast path check
+        uint32_t m_generation = 1;  // Generation counter for new archetypes
         
         // Helper to update metrics when entity count changes
         void UpdateArchetypeMetrics(Archetype* archetype)
@@ -1047,21 +1298,14 @@ namespace Astra
             m_archetypes.erase(m_archetypes.begin() + index);
         }
         
-        // Remove all edges to/from an archetype (NEW: edges are now stored in archetypes)
+        // Remove all edges to/from an archetype
         void RemoveArchetypeEdges(Archetype* archetype)
         {
-            // Remove edges pointing TO this archetype from all other archetypes
-            for (auto& entry : m_archetypes)
-            {
-                Archetype* otherArchetype = entry.archetype.get();
-                if (otherArchetype != archetype)
-                {
-                    // Remove any edges pointing to the archetype being deleted
-                    otherArchetype->RemoveEdgesTo(archetype);
-                }
-            }
+            // Remove edges pointing TO this archetype
+            m_edgeGraph.RemoveEdgesTo(archetype);
             
-            // Note: Edges FROM this archetype will be destroyed when the archetype is deleted
+            // Remove edges FROM this archetype
+            m_edgeGraph.RemoveEdgesFrom(archetype);
         }
     };
 }
