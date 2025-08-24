@@ -163,6 +163,189 @@ namespace Astra
 
                 m_count += count;
             }
+            
+            /**
+             * Batch move components from another chunk
+             * @param dstIndices Where to place components in this chunk
+             * @param srcChunk Source chunk to move from
+             * @param srcIndices Which entities to move from source
+             * @param componentsToMove Mask of components to move
+             */
+            void BatchMoveComponentsFrom(
+                std::span<const size_t> dstIndices,
+                const Chunk& srcChunk,
+                std::span<const size_t> srcIndices,
+                const ComponentMask& componentsToMove)
+            {
+                assert(dstIndices.size() == srcIndices.size());
+                size_t count = dstIndices.size();
+                
+                // Move each component type in batch
+                // Early exit if no components to move
+                if (componentsToMove.None()) return;
+                
+                // Find first and last set bits to reduce iteration range
+                ComponentID firstSet = 0;
+                ComponentID lastSet = MAX_COMPONENTS - 1;
+                
+                // Find first set bit
+                for (; firstSet < MAX_COMPONENTS && !componentsToMove.Test(firstSet); ++firstSet);
+                // Find last set bit
+                for (; lastSet > firstSet && !componentsToMove.Test(lastSet); --lastSet);
+                
+                // Only iterate through the range that has set bits
+                for (ComponentID id = firstSet; id <= lastSet; ++id)
+                {
+                    if (!componentsToMove.Test(id)) continue;
+                    
+                    const auto& dstInfo = m_componentArrays[id];
+                    const auto& srcInfo = srcChunk.m_componentArrays[id];
+                    
+                    if (!dstInfo.isValid || !srcInfo.isValid) continue;
+                    
+                    // Check if we can do a fast batch copy for trivially copyable types
+                    if (dstInfo.descriptor.is_trivially_copyable && 
+                        AreIndicesContiguous(dstIndices) && 
+                        AreIndicesContiguous(srcIndices))
+                    {
+                        // Fast path: use memcpy for contiguous ranges
+                        void* dstPtr = static_cast<std::byte*>(dstInfo.base) + dstIndices[0] * dstInfo.stride;
+                        void* srcPtr = static_cast<std::byte*>(srcInfo.base) + srcIndices[0] * srcInfo.stride;
+                        std::memcpy(dstPtr, srcPtr, count * dstInfo.stride);
+                    }
+                    else
+                    {
+                        // Slow path: move components individually
+                        for (size_t i = 0; i < count; ++i)
+                        {
+                            void* dstPtr = static_cast<std::byte*>(dstInfo.base) + dstIndices[i] * dstInfo.stride;
+                            void* srcPtr = static_cast<std::byte*>(srcInfo.base) + srcIndices[i] * srcInfo.stride;
+                            
+                            if (dstInfo.descriptor.is_trivially_copyable)
+                            {
+                                // Use memcpy for POD types
+                                std::memcpy(dstPtr, srcPtr, dstInfo.stride);
+                            }
+                            else
+                            {
+                                // Use move constructor for non-POD types
+                                dstInfo.descriptor.MoveConstruct(dstPtr, srcPtr);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Helper to check if indices are contiguous
+            static bool AreIndicesContiguous(std::span<const size_t> indices)
+            {
+                if (indices.size() <= 1) return true;
+                for (size_t i = 1; i < indices.size(); ++i)
+                {
+                    if (indices[i] != indices[i-1] + 1) return false;
+                }
+                return true;
+            }
+            
+            /**
+             * Batch construct a specific component with given value
+             * @param indices Where to construct the component
+             * @param value Value to construct with
+             */
+            template<Component T>
+            void BatchConstructComponent(
+                std::span<const size_t> indices,
+                const T& value)
+            {
+                ComponentID id = TypeID<T>::Value();
+                const auto& info = m_componentArrays[id];
+                
+                if (!info.isValid) return;
+                
+                // Optimize for trivially copyable types
+                if constexpr (std::is_trivially_copyable_v<T>)
+                {
+                    // Check if indices are contiguous for super fast path
+                    bool contiguous = true;
+                    for (size_t i = 1; i < indices.size(); ++i)
+                    {
+                        if (indices[i] != indices[i-1] + 1)
+                        {
+                            contiguous = false;
+                            break;
+                        }
+                    }
+                    
+                    if (contiguous && indices.size() > 1)
+                    {
+                        // Super fast path: construct first, then memcpy to rest
+                        T* firstPtr = static_cast<T*>(static_cast<void*>(
+                            static_cast<std::byte*>(info.base) + indices[0] * info.stride));
+                        new (firstPtr) T(value);
+                        
+                        // Copy to remaining contiguous slots
+                        for (size_t i = 1; i < indices.size(); ++i)
+                        {
+                            T* ptr = static_cast<T*>(static_cast<void*>(
+                                static_cast<std::byte*>(info.base) + indices[i] * info.stride));
+                            std::memcpy(ptr, firstPtr, sizeof(T));
+                        }
+                    }
+                    else
+                    {
+                        // Fast path for non-contiguous POD types
+                        for (size_t idx : indices)
+                        {
+                            assert(idx < m_capacity);
+                            T* ptr = static_cast<T*>(static_cast<void*>(
+                                static_cast<std::byte*>(info.base) + idx * info.stride));
+                            std::memcpy(ptr, &value, sizeof(T));
+                        }
+                    }
+                }
+                else
+                {
+                    // Slow path: construct each component
+                    for (size_t idx : indices)
+                    {
+                        assert(idx < m_capacity);
+                        T* ptr = static_cast<T*>(static_cast<void*>(
+                            static_cast<std::byte*>(info.base) + idx * info.stride));
+                        new (ptr) T(value);
+                    }
+                }
+            }
+            
+            /**
+             * Batch move a specific component from source chunk
+             * @param dstIndices Where to place components
+             * @param srcChunk Source chunk
+             * @param srcIndices Which components to move
+             */
+            template<Component T>
+            void BatchMoveComponent(
+                std::span<const size_t> dstIndices,
+                const Chunk& srcChunk,
+                std::span<const size_t> srcIndices)
+            {
+                assert(dstIndices.size() == srcIndices.size());
+                ComponentID id = TypeID<T>::Value();
+                
+                const auto& dstInfo = m_componentArrays[id];
+                const auto& srcInfo = srcChunk.m_componentArrays[id];
+                
+                if (!dstInfo.isValid || !srcInfo.isValid) return;
+                
+                // Batch move specific component type
+                for (size_t i = 0; i < dstIndices.size(); ++i)
+                {
+                    T* dstPtr = static_cast<T*>(static_cast<void*>(
+                        static_cast<std::byte*>(dstInfo.base) + dstIndices[i] * dstInfo.stride));
+                    T* srcPtr = static_cast<T*>(static_cast<void*>(
+                        static_cast<std::byte*>(srcInfo.base) + srcIndices[i] * srcInfo.stride));
+                    new (dstPtr) T(std::move(*srcPtr));
+                }
+            }
 
             /**
              * Remove entity from chunk (swap with last)
@@ -228,13 +411,33 @@ namespace Astra
             
             /**
              * Get base pointer to component array
+             * Supports both const and non-const access based on template parameter
              */
             template<Component T>
-            T* GetComponentArray()
+            ASTRA_FORCEINLINE auto GetComponentArray()
             {
-                ComponentID id = TypeID<T>::Value();
-                // Direct array access - still O(1)!
-                return reinterpret_cast<T*>(m_componentArrays[id].base);
+                using BaseType = std::remove_const_t<T>;
+                ComponentID id = TypeID<BaseType>::Value();
+                
+                if constexpr (std::is_const_v<T>)
+                {
+                    return reinterpret_cast<const BaseType*>(m_componentArrays[id].base);
+                }
+                else
+                {
+                    return reinterpret_cast<BaseType*>(m_componentArrays[id].base);
+                }
+            }
+            
+            /**
+             * Const overload for getting component array
+             */
+            template<Component T>
+            ASTRA_FORCEINLINE const std::remove_const_t<T>* GetComponentArray() const
+            {
+                using BaseType = std::remove_const_t<T>;
+                ComponentID id = TypeID<BaseType>::Value();
+                return reinterpret_cast<const BaseType*>(m_componentArrays[id].base);
             }
             
             /**
@@ -271,10 +474,11 @@ namespace Astra
             ASTRA_NODISCARD size_t GetCapacity() const noexcept { return m_capacity; }
             ASTRA_NODISCARD Entity GetEntity(size_t index) const { assert(index < m_count); return m_entities[index]; }
             ASTRA_NODISCARD const std::vector<Entity>& GetEntities() const { return m_entities; }
-            ASTRA_NODISCARD std::vector<Entity>& GetEntities() { return m_entities; }
+            ASTRA_FORCEINLINE ASTRA_NODISCARD std::vector<Entity>& GetEntities() { return m_entities; }
             
             // Optimized component array info for O(1) lookups
-            struct ComponentArrayInfo {
+            struct ComponentArrayInfo
+            {
                 void* base{nullptr};
                 size_t stride{0};  // Component size for pointer arithmetic
                 ComponentDescriptor descriptor{};  // Full descriptor for O(1) component operations

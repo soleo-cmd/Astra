@@ -1,12 +1,12 @@
 #include <gtest/gtest.h>
-#include "Astra/Entity/EntityPool.hpp"
+#include "Astra/Entity/EntityManager.hpp"
 #include <algorithm>
 #include <unordered_set>
 #include <vector>
 #include <thread>
 #include <chrono>
 
-class EntityPoolTest : public ::testing::Test
+class EntityManagerTest : public ::testing::Test
 {
 protected:
     void SetUp() override {}
@@ -14,9 +14,9 @@ protected:
 };
 
 // Test default construction
-TEST_F(EntityPoolTest, DefaultConstruction)
+TEST_F(EntityManagerTest, DefaultConstruction)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     EXPECT_EQ(pool.Size(), 0u);
     EXPECT_EQ(pool.Capacity(), 0u);
@@ -25,9 +25,9 @@ TEST_F(EntityPoolTest, DefaultConstruction)
 }
 
 // Test construction with capacity
-TEST_F(EntityPoolTest, ConstructionWithCapacity)
+TEST_F(EntityManagerTest, ConstructionWithCapacity)
 {
-    Astra::EntityPool pool(1000);
+    Astra::EntityManager pool(1000);
     
     EXPECT_EQ(pool.Size(), 0u);
     EXPECT_TRUE(pool.Empty());
@@ -36,23 +36,22 @@ TEST_F(EntityPoolTest, ConstructionWithCapacity)
 }
 
 // Test construction with custom memory config
-TEST_F(EntityPoolTest, ConstructionWithMemoryConfig)
+TEST_F(EntityManagerTest, ConstructionWithMemoryConfig)
 {
-    Astra::EntityPool::Config config;
-    config.entitiesPerSegment = 1024;  // Smaller segments for testing
-    config.autoRelease = true;
-    config.maxEmptySegments = 1;
+    Astra::EntityManager::Config config(1024);  // Smaller segments for testing
+    config.tableConfig.autoRelease = true;
+    config.tableConfig.maxEmptySegments = 1;
     
-    Astra::EntityPool pool(config);
+    Astra::EntityManager pool(config);
     
     EXPECT_EQ(pool.Size(), 0u);
     EXPECT_TRUE(pool.Empty());
 }
 
 // Test single entity creation
-TEST_F(EntityPoolTest, SingleEntityCreation)
+TEST_F(EntityManagerTest, SingleEntityCreation)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     Astra::Entity entity = pool.Create();
     
@@ -64,9 +63,9 @@ TEST_F(EntityPoolTest, SingleEntityCreation)
 }
 
 // Test multiple entity creation
-TEST_F(EntityPoolTest, MultipleEntityCreation)
+TEST_F(EntityManagerTest, MultipleEntityCreation)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     std::vector<Astra::Entity> entities;
     
     const size_t count = 100;
@@ -91,9 +90,9 @@ TEST_F(EntityPoolTest, MultipleEntityCreation)
 }
 
 // Test batch entity creation
-TEST_F(EntityPoolTest, BatchEntityCreation)
+TEST_F(EntityManagerTest, BatchEntityCreation)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     const size_t batchSize = 1000;
     std::vector<Astra::Entity> entities;
@@ -121,9 +120,9 @@ TEST_F(EntityPoolTest, BatchEntityCreation)
 }
 
 // Test entity destruction
-TEST_F(EntityPoolTest, EntityDestruction)
+TEST_F(EntityManagerTest, EntityDestruction)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     Astra::Entity entity = pool.Create();
     EXPECT_TRUE(pool.IsValid(entity));
@@ -138,9 +137,9 @@ TEST_F(EntityPoolTest, EntityDestruction)
 }
 
 // Test destroying invalid entity
-TEST_F(EntityPoolTest, DestroyInvalidEntity)
+TEST_F(EntityManagerTest, DestroyInvalidEntity)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     Astra::Entity invalid;
     bool destroyed = pool.Destroy(invalid);
@@ -155,9 +154,9 @@ TEST_F(EntityPoolTest, DestroyInvalidEntity)
 }
 
 // Test entity recycling
-TEST_F(EntityPoolTest, EntityRecycling)
+TEST_F(EntityManagerTest, EntityRecycling)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     // Create and destroy an entity
     Astra::Entity first = pool.Create();
@@ -176,9 +175,9 @@ TEST_F(EntityPoolTest, EntityRecycling)
 }
 
 // Test version wraparound
-TEST_F(EntityPoolTest, VersionWraparound)
+TEST_F(EntityManagerTest, VersionWraparound)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     // Create entity with max version (simulate many recycles)
     Astra::Entity entity = pool.Create();
@@ -195,9 +194,9 @@ TEST_F(EntityPoolTest, VersionWraparound)
 }
 
 // Test batch destruction
-TEST_F(EntityPoolTest, BatchDestruction)
+TEST_F(EntityManagerTest, BatchDestruction)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     // Create entities
     std::vector<Astra::Entity> entities;
@@ -224,9 +223,9 @@ TEST_F(EntityPoolTest, BatchDestruction)
 }
 
 // Test IsValid method
-TEST_F(EntityPoolTest, IsValidMethod)
+TEST_F(EntityManagerTest, IsValidMethod)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     // Invalid entity
     Astra::Entity invalid;
@@ -246,9 +245,9 @@ TEST_F(EntityPoolTest, IsValidMethod)
 }
 
 // Test GetVersion method
-TEST_F(EntityPoolTest, GetVersionMethod)
+TEST_F(EntityManagerTest, GetVersionMethod)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     Astra::Entity entity = pool.Create();
     auto id = entity.GetID();
@@ -263,9 +262,9 @@ TEST_F(EntityPoolTest, GetVersionMethod)
 }
 
 // Test Clear method
-TEST_F(EntityPoolTest, ClearMethod)
+TEST_F(EntityManagerTest, ClearMethod)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     // Create some entities
     std::vector<Astra::Entity> entities;
@@ -288,9 +287,9 @@ TEST_F(EntityPoolTest, ClearMethod)
 }
 
 // Test Reserve method
-TEST_F(EntityPoolTest, ReserveMethod)
+TEST_F(EntityManagerTest, ReserveMethod)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     // Reserve doesn't pre-allocate entities, just prepares internal structures
     pool.Reserve(10000);
@@ -306,9 +305,9 @@ TEST_F(EntityPoolTest, ReserveMethod)
 }
 
 // Test iterator functionality
-TEST_F(EntityPoolTest, IteratorFunctionality)
+TEST_F(EntityManagerTest, IteratorFunctionality)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     // Empty pool
     EXPECT_EQ(pool.begin(), pool.end());
@@ -351,10 +350,10 @@ TEST_F(EntityPoolTest, IteratorFunctionality)
 }
 
 // Test segmented memory allocation
-TEST_F(EntityPoolTest, SegmentedMemoryAllocation)
+TEST_F(EntityManagerTest, SegmentedMemoryAllocation)
 {
-    Astra::EntityPool::Config config(1024);  // Small segments
-    Astra::EntityPool pool(config);
+    Astra::EntityManager::Config config(1024);  // Small segments
+    Astra::EntityManager pool(config);
     
     // Create entities across multiple segments
     std::vector<Astra::Entity> entities;
@@ -377,13 +376,13 @@ TEST_F(EntityPoolTest, SegmentedMemoryAllocation)
 }
 
 // Test memory release functionality
-TEST_F(EntityPoolTest, MemoryRelease)
+TEST_F(EntityManagerTest, MemoryRelease)
 {
-    Astra::EntityPool::Config config(1024);
-    config.autoRelease = true;
-    config.maxEmptySegments = 0;  // Release immediately
+    Astra::EntityManager::Config config(1024);
+    config.tableConfig.autoRelease = true;
+    config.tableConfig.maxEmptySegments = 0;  // Release immediately
     
-    Astra::EntityPool pool(config);
+    Astra::EntityManager pool(config);
     
     // Create entities in multiple segments
     std::vector<Astra::Entity> entities;
@@ -396,7 +395,8 @@ TEST_F(EntityPoolTest, MemoryRelease)
     }
     
     // First segment should be released
-    pool.MaybeReleaseSegments();
+    // MaybeReleaseSegments is now internal to EntityTable
+    // It's called automatically when entities are destroyed
     
     // Second segment entities should still be valid
     for (size_t i = 1024; i < 2048; ++i)
@@ -406,9 +406,9 @@ TEST_F(EntityPoolTest, MemoryRelease)
 }
 
 // Test ShrinkToFit method
-TEST_F(EntityPoolTest, ShrinkToFit)
+TEST_F(EntityManagerTest, ShrinkToFit)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     // Create and destroy many entities
     std::vector<Astra::Entity> entities;
@@ -433,9 +433,9 @@ TEST_F(EntityPoolTest, ShrinkToFit)
 }
 
 // Test large scale operations
-TEST_F(EntityPoolTest, LargeScaleOperations)
+TEST_F(EntityManagerTest, LargeScaleOperations)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     const size_t largeCount = 100000;
     std::vector<Astra::Entity> entities;
@@ -461,9 +461,9 @@ TEST_F(EntityPoolTest, LargeScaleOperations)
 }
 
 // Test recycling pattern
-TEST_F(EntityPoolTest, RecyclingPattern)
+TEST_F(EntityManagerTest, RecyclingPattern)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     // Simulate game loop: create, destroy, recycle
     for (int frame = 0; frame < 10; ++frame)
@@ -488,10 +488,10 @@ TEST_F(EntityPoolTest, RecyclingPattern)
 }
 
 // Test entity ID limits
-TEST_F(EntityPoolTest, EntityIDLimits)
+TEST_F(EntityManagerTest, EntityIDLimits)
 {
-    Astra::EntityPool::Config config(1024);
-    Astra::EntityPool pool(config);
+    Astra::EntityManager::Config config(1024);
+    Astra::EntityManager pool(config);
     
     // Create many entities to test ID allocation
     std::vector<Astra::Entity> entities;
@@ -506,9 +506,9 @@ TEST_F(EntityPoolTest, EntityIDLimits)
     }
 }
 // Test empty batch operations
-TEST_F(EntityPoolTest, EmptyBatchOperations)
+TEST_F(EntityManagerTest, EmptyBatchOperations)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     // Empty batch creation
     std::vector<Astra::Entity> entities;
@@ -522,9 +522,9 @@ TEST_F(EntityPoolTest, EmptyBatchOperations)
 }
 
 // Test Validate method (debug builds)
-TEST_F(EntityPoolTest, ValidateMethod)
+TEST_F(EntityManagerTest, ValidateMethod)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     // Should not crash on empty pool
     pool.Validate();
@@ -544,9 +544,9 @@ TEST_F(EntityPoolTest, ValidateMethod)
 }
 
 // Test recycled count tracking
-TEST_F(EntityPoolTest, RecycledCountTracking)
+TEST_F(EntityManagerTest, RecycledCountTracking)
 {
-    Astra::EntityPool pool;
+    Astra::EntityManager pool;
     
     EXPECT_EQ(pool.RecycledCount(), 0u);
     
@@ -567,28 +567,28 @@ TEST_F(EntityPoolTest, RecycledCountTracking)
 }
 
 // Test custom segment size in MemoryConfig
-TEST_F(EntityPoolTest, CustomSegmentSize)
+TEST_F(EntityManagerTest, CustomSegmentSize)
 {
     // Test with various segment sizes (minimum enforced is 1024)
     std::vector<size_t> segmentSizes = {512, 1024, 2048, 4096, 8192};
     
     for (size_t segSize : segmentSizes)
     {
-        Astra::EntityPool::Config config(static_cast<Astra::EntityPool::IDType>(segSize));
+        Astra::EntityManager::Config config(static_cast<Astra::EntityManager::IDType>(segSize));
         
         // Verify it was rounded to power of 2 and enforced minimum of 1024
         size_t expected = std::max(size_t(1024), std::bit_floor(segSize));
-        EXPECT_EQ(config.entitiesPerSegment, static_cast<Astra::EntityPool::IDType>(expected));
+        EXPECT_EQ(config.tableConfig.entitiesPerSegment, static_cast<Astra::EntityManager::IDType>(expected));
         
         // Verify shift and mask are correct
-        EXPECT_EQ(config.entitiesPerSegmentMask, config.entitiesPerSegment - 1);
-        EXPECT_EQ(1u << config.entitiesPerSegmentShift, config.entitiesPerSegment);
+        EXPECT_EQ(config.tableConfig.entitiesPerSegmentMask, config.tableConfig.entitiesPerSegment - 1);
+        EXPECT_EQ(1u << config.tableConfig.entitiesPerSegmentShift, config.tableConfig.entitiesPerSegment);
         
-        Astra::EntityPool pool(config);
+        Astra::EntityManager pool(config);
         
         // Create entities spanning multiple segments
         std::vector<Astra::Entity> entities;
-        pool.CreateBatch(config.entitiesPerSegment * 2 + 100, std::back_inserter(entities));
+        pool.CreateBatch(config.tableConfig.entitiesPerSegment * 2 + 100, std::back_inserter(entities));
         
         // All should be valid
         for (const auto& entity : entities)

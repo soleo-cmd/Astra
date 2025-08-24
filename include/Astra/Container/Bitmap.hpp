@@ -75,7 +75,7 @@ namespace Astra
                 }
                     
                 // Check remaining words
-                for (size_t i = SIMD_WORDS; i < WORD_COUNT; ++i) ASTRA_UNLIKELY
+                for (size_t i = SIMD_WORDS; i < WORD_COUNT; ++i)
                 {
                     if ((m_words[i] & mask.m_words[i]) != mask.m_words[i]) ASTRA_UNLIKELY
                     {
@@ -86,7 +86,7 @@ namespace Astra
             else
             {
                 // Fallback for small bitmaps
-                for (size_t i = 0; i < WORD_COUNT; ++i) ASTRA_LIKELY
+                for (size_t i = 0; i < WORD_COUNT; ++i)
                 {
                     if ((m_words[i] & mask.m_words[i]) != mask.m_words[i]) ASTRA_UNLIKELY
                     {
@@ -110,7 +110,7 @@ namespace Astra
                     return false;
                 }
                     
-                for (size_t i = SIMD_WORDS; i < WORD_COUNT; ++i) ASTRA_UNLIKELY
+                for (size_t i = SIMD_WORDS; i < WORD_COUNT; ++i)
                 {
                     if (m_words[i] != other.m_words[i]) ASTRA_UNLIKELY
                     {
@@ -134,6 +134,27 @@ namespace Astra
                 result.m_words[i] = m_words[i] & other.m_words[i];
             }
             return result;
+        }
+        
+        // Bitwise OR (union)
+        ASTRA_NODISCARD Bitmap operator|(const Bitmap& other) const noexcept
+        {
+            Bitmap result;
+            for (size_t i = 0; i < WORD_COUNT; ++i)
+            {
+                result.m_words[i] = m_words[i] | other.m_words[i];
+            }
+            return result;
+        }
+        
+        // Bitwise OR assignment (union in-place)
+        Bitmap& operator|=(const Bitmap& other) noexcept
+        {
+            for (size_t i = 0; i < WORD_COUNT; ++i)
+            {
+                m_words[i] |= other.m_words[i];
+            }
+            return *this;
         }
         
         // Count set bits
@@ -191,7 +212,7 @@ namespace Astra
             const size_t processCount = std::min(count, size_t(32));
             
             // For each bitmap
-            for (size_t i = 0; i < processCount; ++i) ASTRA_LIKELY
+            for (size_t i = 0; i < processCount; ++i)
             {
                 if (bitmaps[i].HasAll(mask)) ASTRA_UNLIKELY
                 {

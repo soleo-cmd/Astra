@@ -471,7 +471,7 @@ namespace Astra
         }
         
         /**
-         * Deserialize std::set
+         * Deserialize
          */
         template<typename T, typename Compare, typename Allocator>
         BinaryReader& operator()(std::set<T, Compare, Allocator>& set)

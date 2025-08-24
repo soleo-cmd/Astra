@@ -386,7 +386,7 @@ private:
     // the last bytes must always be literals
     Length numLiterals = BlockEndLiterals;
     // backwards optimal parsing
-    for (int64_t i = (int64_t)blockEnd - (1 + BlockEndLiterals); i >= 0; i--) // ignore the last 5 bytes, they are always literals
+    for (int64_t i = (int64_t)blockEnd - (1 + BlockEndLiterals); i >= 0; --i) // ignore the last 5 bytes, they are always literals
     {
       // if encoded as a literal
       numLiterals++;
@@ -423,7 +423,7 @@ private:
         Length nextCostIncrease = 18; // need one more byte for 19+ long matches (next increase: 19+255*x)
 
         // try all match lengths (start with short ones)
-        for (Length length = MinMatch; length <= match.length; length++)
+        for (Length length = MinMatch; length <= match.length; ++length)
         {
           // token (1 byte) + offset (2 bytes) + extra bytes for long matches
           Cost currentCost = cost[i + length] + extraCost;
@@ -626,7 +626,7 @@ private:
       std::vector<Match> matches(uncompressed ? 0 : blockSize);
       // find longest matches for each position (skip if level=0 which means "uncompressed")
       int64_t i;
-      for (i = lookback; i + BlockEndNoMatch <= int64_t(blockSize) && !uncompressed; i++)
+      for (i = lookback; i + BlockEndNoMatch <= int64_t(blockSize) && !uncompressed; ++i)
       {
         // detect self-matching
         if (i > 0 && dataBlock[i] == dataBlock[i - 1])
@@ -786,11 +786,11 @@ private:
         data.clear();
 
         // clear hash tables
-        for (size_t i = 0; i < previousHash .size(); i++)
+        for (size_t i = 0; i < previousHash .size(); ++i)
           previousHash [i] = EndOfChain;
-        for (size_t i = 0; i < previousExact.size(); i++)
+        for (size_t i = 0; i < previousExact.size(); ++i)
           previousExact[i] = EndOfChain;
-        for (size_t i = 0; i < lastHash.size(); i++)
+        for (size_t i = 0; i < lastHash.size(); ++i)
           lastHash[i] = NoLastHash;
       }
       else

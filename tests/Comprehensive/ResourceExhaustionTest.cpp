@@ -76,7 +76,7 @@ TEST_F(ResourceExhaustionTest, MaxComponentTypes)
 TEST_F(ResourceExhaustionTest, EntityIDSpaceExhaustion)
 {
     // Create a custom entity pool with small initial capacity for testing
-    EntityPool pool(16);  // Small initial capacity
+    EntityManager pool(16);  // Small initial capacity
     
     std::vector<Entity> entities;
     const size_t testCount = 5000;  // Increased from 1000 to stress test more
@@ -300,7 +300,7 @@ TEST_F(ResourceExhaustionTest, SimpleEntityLifecycle)
 }
 
 // Test entity pool fragmentation and recycling
-TEST_F(ResourceExhaustionTest, EntityPoolFragmentation)  // Fixed: was using operator[] instead of Find()
+TEST_F(ResourceExhaustionTest, EntityManagerFragmentation)  // Fixed: was using operator[] instead of Find()
 {
     // Start with a small test to isolate the crash
     const size_t waveSize = 1000; // Back to original to stress test
@@ -363,7 +363,7 @@ TEST_F(ResourceExhaustionTest, EntityPoolFragmentation)  // Fixed: was using ope
     EXPECT_EQ(registry->Size(), waveSize * 3);
     
     // Verify no ID collisions
-    std::unordered_set<Entity::Type> activeIDs;
+    std::unordered_set<Entity::IDType> activeIDs;
     
     // Add remaining entities from waves
     for (size_t i = 1; i < wave1.size(); i += 2)

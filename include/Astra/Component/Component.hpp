@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <limits>
 #include <type_traits>
+#include "../Container/Bitmap.hpp"
 
 namespace Astra
 {
@@ -17,14 +18,17 @@ namespace Astra
     #endif
 
     constexpr std::size_t MAX_COMPONENTS = ASTRA_MAX_COMPONENTS;
+    
+    // Component mask for tracking which components an archetype has
+    using ComponentMask = Bitmap<MAX_COMPONENTS>;
 
     template<typename T>
-    concept Component = std::is_move_constructible_v<T>      && 
-                        std::is_move_assignable_v<T>         &&
-                        std::is_nothrow_move_assignable_v<T> &&
-                        std::is_destructible_v<T>            &&
-                        std::is_nothrow_destructible_v<T>;
-    
+    concept Component = std::is_nothrow_move_assignable_v<std::remove_const_t<T>> &&
+                        std::is_nothrow_destructible_v<std::remove_const_t<T>> &&
+                        std::is_move_constructible_v<std::remove_const_t<T>> &&
+                        std::is_move_assignable_v<std::remove_const_t<T>> &&
+                        std::is_destructible_v<std::remove_const_t<T>>;
+
     // Forward declarations for serialization
     class BinaryWriter;
     class BinaryReader;

@@ -195,7 +195,7 @@ TEST_F(ErrorRecoveryTest, InvalidEntityOperations)
     EXPECT_FALSE(registry->IsValid(invalid));
     
     Entity entity = registry->CreateEntity();
-    Entity::Type id = entity.GetID();
+    Entity::IDType id = entity.GetID();
     Entity::VersionType version = entity.GetVersion();
     registry->DestroyEntity(entity);
     
@@ -340,7 +340,7 @@ TEST_F(ErrorRecoveryTest, ComponentDataIntegrityAfterTransitions)
     EXPECT_EQ(registry->GetComponent<Health>(entity), nullptr);
 }
 
-TEST_F(ErrorRecoveryTest, EntityPoolFragmentationRecovery)
+TEST_F(ErrorRecoveryTest, EntityManagerFragmentationRecovery)
 {
     std::vector<Entity> wave1, wave2, wave3;
     
